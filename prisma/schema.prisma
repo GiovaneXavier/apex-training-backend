@@ -1,0 +1,197 @@
+// Apex Training — Prisma schema
+// Modelagem multi-sports via campo `detalhes` JSON em Treino e Prova.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  ALUNO
+  PROFESSOR
+  NUTRICIONISTA
+}
+
+enum Modalidade {
+  MUSCULACAO
+  CORRIDA
+  CICLISMO
+  NATACAO
+  TRIATHLON
+  OUTRO
+}
+
+enum StatusTreino {
+  PENDENTE
+  EM_EXECUCAO
+  CONCLUIDO
+  PULADO
+}
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  senhaHash    String
+  nome         String
+  role         Role
+  avatarUrl    String?
+  criadoEm     DateTime @default(now())
+  atualizadoEm DateTime @updatedAt
+
+  aluno         Aluno?
+  professor     Professor?
+  nutricionista Nutricionista?
+
+  @@index([role])
+}
+
+model Aluno {
+  id              String   @id @default(cuid())
+  userId          String   @unique
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  dataNascimento  DateTime?
+  pesoKg          Float?
+  alturaCm        Int?
+  stravaUserId    String?  @unique
+  stravaToken     String?
+  stravaRefresh   String?
+  stravaExpiresAt DateTime?
+
+  vinculosProf  VinculoProfessor[]
+  vinculosNutri VinculoNutricionista[]
+  treinos       Treino[]
+  provas        Prova[]
+  recordes      RecordePessoal[]
+  atividades    AtividadeStrava[]
+}
+
+model Professor {
+  id     String @id @default(cuid())
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  bio    String?
+
+  vinculos          VinculoProfessor[]
+  treinosPrescritos Treino[]
+}
+
+model Nutricionista {
+  id     String @id @default(cuid())
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  crn    String?
+
+  vinculos VinculoNutricionista[]
+}
+
+model VinculoProfessor {
+  id          String   @id @default(cuid())
+  alunoId     String
+  professorId String
+  aluno       Aluno     @relation(fields: [alunoId], references: [id], onDelete: Cascade)
+  professor   Professor @relation(fields: [professorId], references: [id], onDelete: Cascade)
+  criadoEm    DateTime  @default(now())
+
+  @@unique([alunoId, professorId])
+}
+
+model VinculoNutricionista {
+  id              String   @id @default(cuid())
+  alunoId         String
+  nutricionistaId String
+  aluno           Aluno         @relation(fields: [alunoId], references: [id], onDelete: Cascade)
+  nutricionista   Nutricionista @relation(fields: [nutricionistaId], references: [id], onDelete: Cascade)
+  aceitoPeloAluno Boolean  @default(false)
+  criadoEm        DateTime @default(now())
+
+  @@unique([alunoId, nutricionistaId])
+}
+
+// O "superpoder" JSON: detalhes contém prescricao + (opcional) execucao,
+// permitindo que musculação, corrida, natação convivam na mesma tabela.
+//
+// Exemplo musculação:
+// {
+//   "tipo": "musculacao",
+//   "exercicios": [
+//     {
+//       "nome": "Supino Inclinado",
+//       "videoUrl": "...",
+//       "prescrito": { "series": 3, "reps": 12, "cargaPctRP": 70, "descansoSeg": 120 },
+//       "realizado": [ { "kg": 32, "reps": 12 }, ... ]
+//     }
+//   ]
+// }
+//
+// Exemplo corrida:
+// { "tipo": "corrida", "distanciaKm": 5, "ritmoAlvoMinKm": "5:30", "realizado": null }
+model Treino {
+  id          String        @id @default(cuid())
+  alunoId     String
+  professorId String?
+  aluno       Aluno         @relation(fields: [alunoId], references: [id], onDelete: Cascade)
+  professor   Professor?    @relation(fields: [professorId], references: [id], onDelete: SetNull)
+  modalidade  Modalidade
+  titulo      String
+  dataAlvo    DateTime
+  status      StatusTreino  @default(PENDENTE)
+  detalhes    Json
+  iniciadoEm  DateTime?
+  finalizadoEm DateTime?
+  criadoEm    DateTime      @default(now())
+  atualizadoEm DateTime     @updatedAt
+
+  @@index([alunoId, dataAlvo])
+  @@index([status])
+}
+
+model Prova {
+  id         String   @id @default(cuid())
+  alunoId    String
+  aluno      Aluno    @relation(fields: [alunoId], references: [id], onDelete: Cascade)
+  modalidade Modalidade
+  nome       String
+  data       DateTime
+  detalhes   Json
+  criadoEm   DateTime @default(now())
+
+  @@index([alunoId, data])
+}
+
+model RecordePessoal {
+  id         String     @id @default(cuid())
+  alunoId    String
+  aluno      Aluno      @relation(fields: [alunoId], references: [id], onDelete: Cascade)
+  modalidade Modalidade
+  exercicio  String     // ex: "Supino Inclinado", "5km", "100m livre"
+  metrica    String     // ex: "kg_x_reps", "tempo", "distancia"
+  valor      Float      // ex: 32.0 (kg), 1290 (segundos), 5000 (metros)
+  unidade    String     // ex: "kg", "s", "m"
+  reps       Int?
+  dataRecorde DateTime  @default(now())
+  treinoId   String?
+
+  @@index([alunoId, exercicio])
+}
+
+model AtividadeStrava {
+  id           String   @id @default(cuid())
+  alunoId      String
+  aluno        Aluno    @relation(fields: [alunoId], references: [id], onDelete: Cascade)
+  stravaId     String   @unique
+  tipo         String   // Run, Ride, Swim, etc.
+  nome         String
+  distanciaM   Float
+  duracaoSeg   Int
+  ritmoMedio   Float?
+  fcMedia      Int?
+  iniciadoEm   DateTime
+  payloadRaw   Json
+  sincronizadoEm DateTime @default(now())
+
+  @@index([alunoId, iniciadoEm])
+}
