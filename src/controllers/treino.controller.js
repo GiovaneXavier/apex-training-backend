@@ -1,10 +1,12 @@
 import { listTreinosQuery, prescreverSchema } from '../schemas/treino.schemas.js';
+import { salvarExecucaoSchema } from '../schemas/execucao.schemas.js';
 import {
   listTreinosByAluno,
   getTreinoById,
   prescreverTreino,
   deleteTreino,
 } from '../services/treino.service.js';
+import { salvarExecucao as salvarExecucaoSvc } from '../services/execucao.service.js';
 
 export async function listByAluno(req, res, next) {
   try {
@@ -40,9 +42,14 @@ export async function prescrever(req, res, next) {
 }
 
 export async function salvarExecucao(req, res, next) {
-  // S3 — apenas placeholder por enquanto
   try {
-    res.status(501).json({ error: 'NotImplemented', sprint: 'S3' });
+    const data = salvarExecucaoSchema.parse(req.body);
+    const result = await salvarExecucaoSvc({
+      user: req.user,
+      treinoId: req.params.id,
+      input: data,
+    });
+    res.json(result);
   } catch (err) {
     next(err);
   }
