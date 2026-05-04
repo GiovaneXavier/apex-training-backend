@@ -128,6 +128,64 @@ export async function detalheAluno(userId, alunoId) {
   };
 }
 
+// Calendário do professor — todos treinos prescritos pelos alunos vinculados no período.
+// Retorna lista flat de treinos com aluno embutido (nome) para o frontend agrupar por dia.
+export async function listCalendarioAlunos(userId, { desde, ate }) {
+  const prof = await getProfessor(userId);
+  const vinculos = await prisma.vinculoProfessor.findMany({
+    where: { professorId: prof.id },
+    select: { alunoId: true },
+  });
+  const alunoIds = vinculos.map((v) => v.alunoId);
+  if (alunoIds.length === 0) return { treinos: [], provas: [] };
+
+  const desdeDate = new Date(desde);
+  const ateDate = new Date(ate);
+
+  const [treinos, provas] = await Promise.all([
+    prisma.treino.findMany({
+      where: {
+        alunoId: { in: alunoIds },
+        dataAlvo: { gte: desdeDate, lt: ateDate },
+      },
+      orderBy: { dataAlvo: 'asc' },
+      include: {
+        aluno: { include: { user: { select: { nome: true } } } },
+      },
+    }),
+    prisma.prova.findMany({
+      where: {
+        alunoId: { in: alunoIds },
+        data: { gte: desdeDate, lt: ateDate },
+      },
+      orderBy: { data: 'asc' },
+      include: {
+        aluno: { include: { user: { select: { nome: true } } } },
+      },
+    }),
+  ]);
+
+  return {
+    treinos: treinos.map((t) => ({
+      id: t.id,
+      alunoId: t.alunoId,
+      alunoNome: t.aluno.user.nome,
+      modalidade: t.modalidade,
+      titulo: t.titulo,
+      status: t.status,
+      dataAlvo: t.dataAlvo,
+    })),
+    provas: provas.map((p) => ({
+      id: p.id,
+      alunoId: p.alunoId,
+      alunoNome: p.aluno.user.nome,
+      modalidade: p.modalidade,
+      nome: p.nome,
+      data: p.data,
+    })),
+  };
+}
+
 export async function dashboardProfessor(userId) {
   const prof = await getProfessor(userId);
 
