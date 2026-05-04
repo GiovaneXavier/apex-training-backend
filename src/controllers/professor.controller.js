@@ -6,8 +6,14 @@ import {
   desvincular,
   detalheAluno,
   dashboardProfessor,
+  listCalendarioAlunos,
 } from '../services/professor.service.js';
 import { HttpError } from '../middleware/errorHandler.js';
+
+const calendarioQuery = z.object({
+  desde: z.string().datetime(),
+  ate: z.string().datetime(),
+});
 
 const vincularSchema = z.object({
   email: z.string().email('Email inválido').toLowerCase().trim(),
@@ -63,6 +69,17 @@ export async function dashboard(req, res, next) {
     ensureProf(req);
     const stats = await dashboardProfessor(req.user.userId);
     res.json(stats);
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function calendario(req, res, next) {
+  try {
+    ensureProf(req);
+    const { desde, ate } = calendarioQuery.parse(req.query);
+    const data = await listCalendarioAlunos(req.user.userId, { desde, ate });
+    res.json(data);
   } catch (err) {
     next(err);
   }
