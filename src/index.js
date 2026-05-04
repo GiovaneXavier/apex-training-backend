@@ -8,6 +8,8 @@ import authRoutes from './routes/auth.routes.js';
 import treinosRoutes from './routes/treinos.routes.js';
 import provasRoutes from './routes/provas.routes.js';
 import professorRoutes from './routes/professor.routes.js';
+import nutriRoutes from './routes/nutri.routes.js';
+import alunoRoutes from './routes/aluno.routes.js';
 import rpsRoutes from './routes/rps.routes.js';
 import stravaRoutes from './routes/strava.routes.js';
 import { errorHandler } from './middleware/errorHandler.js';
@@ -27,6 +29,8 @@ app.use('/api/auth', authRoutes);
 app.use('/api/treinos', treinosRoutes);
 app.use('/api/provas', provasRoutes);
 app.use('/api/professor', professorRoutes);
+app.use('/api/nutri', nutriRoutes);
+app.use('/api/aluno', alunoRoutes);
 app.use('/api/rps', rpsRoutes);
 app.use('/api/strava', stravaRoutes);
 
