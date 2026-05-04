@@ -1,14 +1,22 @@
 import { Router } from 'express';
+
 import { requireAuth } from '../middleware/auth.middleware.js';
+import {
+  conectar,
+  desconectar,
+  obterStatus,
+  sincronizar,
+  atividades,
+} from '../controllers/strava.controller.js';
 
 const router = Router();
 
-router.post('/sync', requireAuth, (req, res) => {
-  res.status(501).json({ error: 'NotImplemented', sprint: 'S5' });
-});
+router.use(requireAuth);
 
-router.get('/callback', (req, res) => {
-  res.status(501).json({ error: 'NotImplemented', sprint: 'S5' });
-});
+router.get('/status', obterStatus);
+router.post('/connect', conectar);
+router.post('/disconnect', desconectar);
+router.post('/sync', sincronizar);
+router.get('/atividades/:alunoId', atividades);
 
 export default router;
