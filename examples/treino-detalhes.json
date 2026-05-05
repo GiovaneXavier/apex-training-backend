@@ -1,0 +1,228 @@
+{
+  "_doc": "Exemplos de payload para POST /api/treinos (campo `detalhes`). Cada bloco abaixo é um exemplo completo do JSON enviado no body.",
+
+  "fartlek_corrida": {
+    "alunoId": "<alunoId>",
+    "modalidade": "CORRIDA",
+    "titulo": "Fartlek Curto · 6×3' forte",
+    "dataAlvo": "2026-05-10T07:00:00.000Z",
+    "detalhes": {
+      "tipo": "corrida",
+      "subtipo": "FARTLEK",
+      "blocos": [
+        {
+          "tipo": "aquecimento",
+          "distanciaM": 1500,
+          "ritmoAlvoMinKm": "6:30",
+          "rpeAlvo": 4
+        },
+        {
+          "tipo": "tiro",
+          "duracaoSeg": 180,
+          "ritmoAlvoMinKm": "4:30",
+          "rpeAlvo": 8,
+          "repeticoes": 6,
+          "recuperacaoSeg": 120,
+          "recuperacaoTipo": "trote",
+          "observacao": "Mantém forma alta nos últimos 30s"
+        },
+        {
+          "tipo": "volta_calma",
+          "distanciaM": 1000,
+          "ritmoAlvoMinKm": "6:30",
+          "rpeAlvo": 3
+        }
+      ],
+      "observacao": "Sessão de qualidade — focar em virar a perna"
+    }
+  },
+
+  "vo2max_ciclismo": {
+    "alunoId": "<alunoId>",
+    "modalidade": "CICLISMO",
+    "titulo": "VO2 Max · 5×4' @ 115% FTP",
+    "dataAlvo": "2026-05-12T18:00:00.000Z",
+    "detalhes": {
+      "tipo": "ciclismo",
+      "ftpW": 240,
+      "blocos": [
+        {
+          "tipo": "aquecimento",
+          "zonaFTP": 2,
+          "potenciaAlvoPctFTP": 65,
+          "duracaoSeg": 600,
+          "cadenciaRpm": 90
+        },
+        {
+          "tipo": "intervalo",
+          "zonaFTP": 5,
+          "potenciaAlvoPctFTP": 115,
+          "duracaoSeg": 240,
+          "cadenciaRpm": 95,
+          "repeticoes": 5,
+          "recuperacaoSeg": 240,
+          "observacao": "Esforço muito difícil — RPE 9"
+        },
+        {
+          "tipo": "volta_calma",
+          "zonaFTP": 1,
+          "potenciaAlvoPctFTP": 50,
+          "duracaoSeg": 600
+        }
+      ]
+    }
+  },
+
+  "css_natacao": {
+    "alunoId": "<alunoId>",
+    "modalidade": "NATACAO",
+    "titulo": "Limiar · 10×100m @ CSS+2s",
+    "dataAlvo": "2026-05-14T06:30:00.000Z",
+    "detalhes": {
+      "tipo": "natacao",
+      "cssBaseSegPor100m": 95,
+      "blocos": [
+        {
+          "tipo": "aquecimento",
+          "repeticoes": 1,
+          "distanciaM": 400,
+          "estilo": "LIVRE",
+          "descansoSeg": 30
+        },
+        {
+          "tipo": "tecnica",
+          "repeticoes": 4,
+          "distanciaM": 50,
+          "estilo": "LIVRE",
+          "equipamento": ["palmar", "snorkel"],
+          "descansoSeg": 20
+        },
+        {
+          "tipo": "principal",
+          "repeticoes": 10,
+          "distanciaM": 100,
+          "estilo": "LIVRE",
+          "paceCssOffsetSeg": 2,
+          "descansoSeg": 15,
+          "observacao": "10x100m a CSS+2s · RI 15s"
+        },
+        {
+          "tipo": "volta_calma",
+          "repeticoes": 1,
+          "distanciaM": 200,
+          "estilo": "LIVRE"
+        }
+      ]
+    }
+  },
+
+  "hyrox_amrap": {
+    "alunoId": "<alunoId>",
+    "modalidade": "OUTRO",
+    "_obs_modalidade": "Prisma enum não tem HYROX — frontend manda OUTRO mas detalhes.tipo='hyrox' identifica.",
+    "titulo": "Hyrox Sim · 1km Run + AMRAP 12'",
+    "dataAlvo": "2026-05-16T09:00:00.000Z",
+    "detalhes": {
+      "tipo": "hyrox",
+      "blocos": [
+        {
+          "formato": "RUN",
+          "distanciaM": 1000,
+          "ritmoAlvoMinKm": "5:00",
+          "observacao": "Compromised running — chegada já cansado"
+        },
+        {
+          "formato": "AMRAP",
+          "duracaoSeg": 720,
+          "exercicios": [
+            {
+              "movimento": "WALL_BALLS",
+              "repeticoes": 15,
+              "carga": { "open": 6, "pro": 9, "unidade": "kg" }
+            },
+            {
+              "movimento": "BURPEE_BROAD_JUMP",
+              "repeticoes": 10
+            },
+            {
+              "movimento": "ROWING",
+              "distanciaM": 250
+            },
+            {
+              "movimento": "SANDBAG_LUNGES",
+              "repeticoes": 20,
+              "carga": { "open": 10, "pro": 20, "unidade": "kg" }
+            }
+          ],
+          "observacao": "Round = 4 exercícios. Conta total de rounds + reps parciais."
+        },
+        {
+          "formato": "STATION",
+          "exercicios": [
+            {
+              "movimento": "SLED_PUSH",
+              "distanciaM": 50,
+              "carga": { "open": 102, "pro": 152, "unidade": "kg" }
+            },
+            {
+              "movimento": "SLED_PULL",
+              "distanciaM": 50,
+              "carga": { "open": 78, "pro": 103, "unidade": "kg" }
+            },
+            {
+              "movimento": "FARMERS_CARRY",
+              "distanciaM": 200,
+              "carga": { "open": 16, "pro": 24, "unidade": "kg" }
+            }
+          ]
+        }
+      ]
+    }
+  },
+
+  "emom_hyrox": {
+    "_doc": "Exemplo extra: EMOM (Every Minute On the Minute) com 10 rounds.",
+    "alunoId": "<alunoId>",
+    "modalidade": "OUTRO",
+    "titulo": "EMOM 10' · SkiErg / Box Jump",
+    "dataAlvo": "2026-05-17T18:00:00.000Z",
+    "detalhes": {
+      "tipo": "hyrox",
+      "blocos": [
+        {
+          "formato": "EMOM",
+          "rounds": 10,
+          "intervaloOffSeg": 60,
+          "exercicios": [
+            { "movimento": "SKI_ERG", "distanciaM": 200 },
+            { "movimento": "BOX_JUMP", "repeticoes": 15 }
+          ],
+          "observacao": "Alterna a cada minuto — sobra do tempo é descanso."
+        }
+      ]
+    }
+  },
+
+  "musculacao_legado": {
+    "_doc": "Formato legado de musculação — segue funcionando.",
+    "alunoId": "<alunoId>",
+    "modalidade": "MUSCULACAO",
+    "titulo": "Treino A · Peito + Tríceps",
+    "dataAlvo": "2026-05-13T07:00:00.000Z",
+    "detalhes": {
+      "tipo": "musculacao",
+      "exercicios": [
+        {
+          "nome": "Supino Reto",
+          "videoUrl": "https://exemplo.com/supino",
+          "prescrito": { "series": 4, "reps": 8, "cargaPctRP": 80, "descansoSeg": 120 },
+          "realizado": []
+        },
+        {
+          "nome": "Tríceps Corda",
+          "prescrito": { "series": 3, "reps": 15, "cargaPctRP": 60, "descansoSeg": 60 }
+        }
+      ]
+    }
+  }
+}
