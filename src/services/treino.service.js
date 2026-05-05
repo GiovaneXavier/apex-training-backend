@@ -94,3 +94,45 @@ export async function deleteTreino({ user, treinoId }) {
   await prisma.treino.delete({ where: { id: treinoId } });
   return { ok: true };
 }
+
+// Histórico de carga: retorna o último set realizado de cada exercício
+// que o aluno executou, para sugerir kg/reps ao iniciar nova série.
+// Aceita lista de nomes; retorna mapa { nomeNormalizado → { kg, reps, dataAlvo, treinoId } }.
+export async function historicoCargas({ user, nomes, alunoId }) {
+  const aluno = await resolveAlunoAccess({ user, alunoId });
+  if (!Array.isArray(nomes) || nomes.length === 0) return {};
+
+  const treinos = await prisma.treino.findMany({
+    where: {
+      alunoId: aluno.id,
+      modalidade: 'MUSCULACAO',
+      status: { in: ['CONCLUIDO', 'EM_EXECUCAO'] },
+    },
+    orderBy: { dataAlvo: 'desc' },
+    take: 60,
+    select: { id: true, dataAlvo: true, detalhes: true },
+  });
+
+  const norm = (s) => s.trim().toLowerCase();
+  const alvos = new Set(nomes.map(norm));
+  const result = {};
+
+  for (const t of treinos) {
+    const exs = t.detalhes?.exercicios ?? [];
+    for (const ex of exs) {
+      const key = norm(ex.nome ?? '');
+      if (!alvos.has(key) || result[key]) continue;
+      const realizadoArr = Array.isArray(ex.realizado) ? ex.realizado : [];
+      const ultimo = [...realizadoArr].reverse().find((s) => s && (s.kg != null || s.reps != null));
+      if (!ultimo) continue;
+      result[key] = {
+        kg: ultimo.kg ?? null,
+        reps: ultimo.reps ?? null,
+        dataAlvo: t.dataAlvo,
+        treinoId: t.id,
+      };
+    }
+    if (Object.keys(result).length === alvos.size) break;
+  }
+  return result;
+}

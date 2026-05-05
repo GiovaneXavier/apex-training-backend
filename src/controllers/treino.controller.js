@@ -5,6 +5,7 @@ import {
   getTreinoById,
   prescreverTreino,
   deleteTreino,
+  historicoCargas,
 } from '../services/treino.service.js';
 import { salvarExecucao as salvarExecucaoSvc } from '../services/execucao.service.js';
 
@@ -58,6 +59,20 @@ export async function salvarExecucao(req, res, next) {
 export async function remover(req, res, next) {
   try {
     const result = await deleteTreino({ user: req.user, treinoId: req.params.id });
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function historico(req, res, next) {
+  try {
+    const nomesParam = req.query.nomes;
+    const nomes = Array.isArray(nomesParam)
+      ? nomesParam
+      : typeof nomesParam === 'string' ? nomesParam.split(',').filter(Boolean) : [];
+    const alunoId = req.query.alunoId;
+    const result = await historicoCargas({ user: req.user, nomes, alunoId });
     res.json(result);
   } catch (err) {
     next(err);
