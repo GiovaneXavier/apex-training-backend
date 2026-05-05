@@ -32,6 +32,33 @@ enum StatusTreino {
   PULADO
 }
 
+enum DiaSemana {
+  DOM
+  SEG
+  TER
+  QUA
+  QUI
+  SEX
+  SAB
+}
+
+enum GrupoMuscular {
+  PEITO
+  COSTAS
+  OMBRO
+  BICEPS
+  TRICEPS
+  ANTEBRACO
+  ABDOMEN
+  GLUTEO
+  QUADRICEPS
+  POSTERIOR
+  PANTURRILHA
+  CARDIO
+  CORE
+  OUTRO
+}
+
 model User {
   id           String   @id @default(cuid())
   email        String   @unique
@@ -67,6 +94,7 @@ model Aluno {
   provas        Prova[]
   recordes      RecordePessoal[]
   atividades    AtividadeStrava[]
+  rotinas       RotinaMusculacao[]
 }
 
 model Professor {
@@ -77,6 +105,7 @@ model Professor {
 
   vinculos          VinculoProfessor[]
   treinosPrescritos Treino[]
+  rotinas           RotinaMusculacao[]
 }
 
 model Nutricionista {
@@ -133,8 +162,10 @@ model Treino {
   id          String        @id @default(cuid())
   alunoId     String
   professorId String?
+  rotinaId    String?       // null para treinos avulsos (corrida, etc.)
   aluno       Aluno         @relation(fields: [alunoId], references: [id], onDelete: Cascade)
   professor   Professor?    @relation(fields: [professorId], references: [id], onDelete: SetNull)
+  rotina      RotinaMusculacao? @relation(fields: [rotinaId], references: [id], onDelete: SetNull)
   modalidade  Modalidade
   titulo      String
   dataAlvo    DateTime
@@ -142,6 +173,7 @@ model Treino {
   detalhes    Json
   iniciadoEm  DateTime?
   finalizadoEm DateTime?
+  reagendadoDe DateTime?    // dataAlvo original antes de reagendar
   criadoEm    DateTime      @default(now())
   atualizadoEm DateTime     @updatedAt
 
@@ -194,4 +226,73 @@ model AtividadeStrava {
   sincronizadoEm DateTime @default(now())
 
   @@index([alunoId, iniciadoEm])
+}
+
+// ──────────────────────────────────────────────────────────────
+// Catálogo global de exercícios — cadastrado por professor.
+// Compartilhado entre todos os professores e reutilizado em rotinas.
+// ──────────────────────────────────────────────────────────────
+model Exercicio {
+  id              String         @id @default(cuid())
+  nome            String         @unique
+  videoUrl        String?
+  imagemUrl       String?
+  grupoMuscular   GrupoMuscular?
+  equipamento     String?        // ex: "Barra", "Halter", "Máquina"
+  instrucoes      String?        // dicas curtas de execução
+  criadoPorId     String?        // Professor.id (opcional para seed)
+  criadoEm        DateTime       @default(now())
+  atualizadoEm    DateTime       @updatedAt
+
+  rotinaExercicios RotinaExercicio[]
+
+  @@index([grupoMuscular])
+}
+
+// ──────────────────────────────────────────────────────────────
+// Rotina de musculação — template prescrito para um aluno em um
+// dia da semana, válido em uma janela (vigência). Não tem sets
+// realizados — esses ficam nas instâncias `Treino` geradas a partir
+// dela quando o aluno executa.
+// ──────────────────────────────────────────────────────────────
+model RotinaMusculacao {
+  id              String     @id @default(cuid())
+  alunoId         String
+  professorId     String
+  nome            String     // ex: "Treino A — Peito + Tríceps"
+  diaSemana       DiaSemana
+  vigenciaInicio  DateTime
+  vigenciaFim     DateTime?  // null = rotina aberta (sem fim)
+  criadoEm        DateTime   @default(now())
+  atualizadoEm    DateTime   @updatedAt
+
+  aluno      Aluno     @relation(fields: [alunoId], references: [id], onDelete: Cascade)
+  professor  Professor @relation(fields: [professorId], references: [id], onDelete: Cascade)
+  exercicios RotinaExercicio[]
+  treinos    Treino[]  // instâncias geradas
+
+  @@index([alunoId, diaSemana])
+  @@index([alunoId, vigenciaInicio, vigenciaFim])
+}
+
+// Vínculo exercício → rotina, com prescrição inline.
+model RotinaExercicio {
+  id          String   @id @default(cuid())
+  rotinaId    String
+  exercicioId String
+  ordem       Int
+  series      Int
+  reps        Int?
+  repsMin     Int?
+  repsMax     Int?
+  cargaPctRP  Float?
+  cargaKg     Float?
+  descansoSeg Int?
+  observacao  String?
+
+  rotina    RotinaMusculacao @relation(fields: [rotinaId], references: [id], onDelete: Cascade)
+  exercicio Exercicio        @relation(fields: [exercicioId], references: [id], onDelete: Restrict)
+
+  @@unique([rotinaId, ordem])
+  @@index([rotinaId])
 }

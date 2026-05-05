@@ -12,12 +12,21 @@ import nutriRoutes from './routes/nutri.routes.js';
 import alunoRoutes from './routes/aluno.routes.js';
 import rpsRoutes from './routes/rps.routes.js';
 import stravaRoutes from './routes/strava.routes.js';
+import exercicioRoutes from './routes/exercicio.routes.js';
+import rotinaRoutes from './routes/rotina.routes.js';
 import { errorHandler } from './middleware/errorHandler.js';
 
 const app = express();
 
 app.use(helmet());
-app.use(cors({ origin: process.env.CORS_ORIGIN || '*', credentials: true }));
+const corsOrigins = (process.env.CORS_ORIGIN || '*')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
+app.use(cors({
+  origin: corsOrigins.includes('*') ? '*' : corsOrigins,
+  credentials: true,
+}));
 app.use(express.json({ limit: '1mb' }));
 app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
 
@@ -33,6 +42,8 @@ app.use('/api/nutri', nutriRoutes);
 app.use('/api/aluno', alunoRoutes);
 app.use('/api/rps', rpsRoutes);
 app.use('/api/strava', stravaRoutes);
+app.use('/api/exercicios', exercicioRoutes);
+app.use('/api/rotinas', rotinaRoutes);
 
 app.use((req, res) => res.status(404).json({ error: 'NotFound', path: req.path }));
 app.use(errorHandler);
