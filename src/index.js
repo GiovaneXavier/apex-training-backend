@@ -1,5 +1,23 @@
 import 'dotenv/config';
 import express from 'express';
+
+// Validação fail-fast de segredos críticos.
+// Em produção, JWT_SECRET ausente, vazio ou com placeholders conhecidos
+// faz o processo terminar — preferir derrubar a subir inseguro.
+const JWT_SECRET = process.env.JWT_SECRET ?? '';
+const PLACEHOLDER_SECRETS = new Set([
+  '', 'change-me', 'change-me-in-production', 'secret', 'changeme',
+]);
+if (process.env.NODE_ENV === 'production') {
+  if (PLACEHOLDER_SECRETS.has(JWT_SECRET) || JWT_SECRET.length < 32) {
+    console.error('[apex-training] FATAL: JWT_SECRET ausente, fraco ou placeholder em produção.');
+    console.error('Gere com: node -e "console.log(require(\\"crypto\\").randomBytes(48).toString(\\"base64\\"))"');
+    process.exit(1);
+  }
+} else if (PLACEHOLDER_SECRETS.has(JWT_SECRET)) {
+  console.warn('[apex-training] aviso: JWT_SECRET é placeholder. OK em dev, NÃO suba pra produção.');
+}
+
 import cors from 'cors';
 import helmet from 'helmet';
 import morgan from 'morgan';
