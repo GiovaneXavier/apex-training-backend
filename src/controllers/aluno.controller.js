@@ -4,6 +4,7 @@ import {
   recusarVinculoNutri,
   listarVinculosProfessor,
 } from '../services/aluno.service.js';
+import { getDesempenho } from '../services/desempenho.service.js';
 import { HttpError } from '../middleware/errorHandler.js';
 
 function ensureAluno(req) {
@@ -45,6 +46,20 @@ export async function professores(req, res, next) {
     ensureAluno(req);
     const data = await listarVinculosProfessor(req.user.userId);
     res.json({ professores: data });
+  } catch (err) {
+    next(err);
+  }
+}
+
+// Desempenho agregado — qualquer role autenticado, com vínculo
+// (validação fica no service). Aceita alunoId opcional via params.
+export async function desempenho(req, res, next) {
+  try {
+    const data = await getDesempenho({
+      user: req.user,
+      alunoId: req.params.alunoId,
+    });
+    res.json(data);
   } catch (err) {
     next(err);
   }
