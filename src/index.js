@@ -32,6 +32,7 @@ import rpsRoutes from './routes/rps.routes.js';
 import stravaRoutes from './routes/strava.routes.js';
 import exercicioRoutes from './routes/exercicio.routes.js';
 import rotinaRoutes from './routes/rotina.routes.js';
+import evolucaoRoutes from './routes/evolucao.routes.js';
 import { errorHandler } from './middleware/errorHandler.js';
 
 const app = express();
@@ -62,6 +63,7 @@ app.use('/api/rps', rpsRoutes);
 app.use('/api/strava', stravaRoutes);
 app.use('/api/exercicios', exercicioRoutes);
 app.use('/api/rotinas', rotinaRoutes);
+app.use('/api/evolucoes', evolucaoRoutes);
 
 app.use((req, res) => res.status(404).json({ error: 'NotFound', path: req.path }));
 app.use(errorHandler);
