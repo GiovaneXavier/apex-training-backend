@@ -6,8 +6,13 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  // URL pooled (PgBouncer/Neon pooler) — runtime da app
+  url       = env("DATABASE_URL")
+  // URL direta (sem pooler) — usada por `prisma migrate` e introspection.
+  // Neon exige isto: o pooler não suporta prepared statements/advisory locks
+  // que o engine de migrations precisa.
+  directUrl = env("DIRECT_URL")
 }
 
 enum Role {
