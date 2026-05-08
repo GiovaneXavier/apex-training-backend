@@ -6,8 +6,13 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  // URL pooled (PgBouncer/Neon pooler) — runtime da app
+  url       = env("DATABASE_URL")
+  // URL direta (sem pooler) — usada por `prisma migrate` e introspection.
+  // Neon exige isto: o pooler não suporta prepared statements/advisory locks
+  // que o engine de migrations precisa.
+  directUrl = env("DIRECT_URL")
 }
 
 enum Role {
@@ -40,6 +45,12 @@ enum DiaSemana {
   QUI
   SEX
   SAB
+}
+
+enum AvaliadorTipo {
+  ALUNO
+  NUTRICIONISTA
+  PROFESSOR
 }
 
 enum GrupoMuscular {
@@ -95,6 +106,7 @@ model Aluno {
   recordes      RecordePessoal[]
   atividades    AtividadeStrava[]
   rotinas       RotinaMusculacao[]
+  evolucoes     EvolucaoCorporal[]
 }
 
 model Professor {
@@ -295,4 +307,57 @@ model RotinaExercicio {
 
   @@unique([rotinaId, ordem])
   @@index([rotinaId])
+}
+
+// ──────────────────────────────────────────────────────────────
+// Evolução corporal / Avaliação física
+// Modelo modular: campos básicos sempre presentes; o JSON `medidas`
+// acomoda tanto auto-avaliação simples (cintura/peso) quanto o
+// protocolo profissional ISAK (8 dobras + 5 perímetros + 2 diâmetros).
+// `avaliadorTipo` audita a confiabilidade do dado.
+//
+// Exemplo medidas (auto-avaliação):
+// { "tipo": "ALUNO_FITA", "cinturaCm": 84, "quadrilCm": 96 }
+//
+// Exemplo medidas (ISAK profissional):
+// {
+//   "tipo": "ISAK_RESTRITO",
+//   "dobras": { "triceps": 12, "subescapular": 14, "biceps": 6, ... },
+//   "perimetros": { "braco": 32, "cintura": 78, ... },
+//   "diametros": { "umeral": 7.1, "femoral": 9.4 }
+// }
+// ──────────────────────────────────────────────────────────────
+model EvolucaoCorporal {
+  id                String        @id @default(cuid())
+  alunoId           String
+  aluno             Aluno         @relation(fields: [alunoId], references: [id], onDelete: Cascade)
+
+  avaliadorId       String?       // userId de quem registrou (Aluno=próprio, Nutri/Prof=outro)
+  avaliadorTipo     AvaliadorTipo
+  dataAvaliacao     DateTime      @default(now())
+
+  // Antropometria básica — presente em todas as variantes
+  pesoKg            Float?
+  alturaCm          Int?
+
+  // Cálculos derivados — calculados no servidor a partir de `medidas`
+  imc               Float?
+  percentualGordura Float?
+  // Protocolo de cálculo: 'JP3', 'JP4', 'JP7', 'DURNIN_WOMERSLEY',
+  // 'ALUNO_FITA', 'ISAK_RESTRITO', 'OUTRO'
+  protocolo         String?
+
+  // JSON flexível: simples (cintura única) ou ISAK completo
+  medidas           Json?
+
+  // { frente: "url", lado: "url", costas: "url", extras: ["url"] }
+  fotos             Json?
+
+  observacoes       String?
+
+  criadoEm          DateTime      @default(now())
+  atualizadoEm      DateTime      @updatedAt
+
+  @@index([alunoId, dataAvaliacao])
+  @@index([avaliadorTipo])
 }

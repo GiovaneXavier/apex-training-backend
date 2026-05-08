@@ -32,17 +32,29 @@ import rpsRoutes from './routes/rps.routes.js';
 import stravaRoutes from './routes/strava.routes.js';
 import exercicioRoutes from './routes/exercicio.routes.js';
 import rotinaRoutes from './routes/rotina.routes.js';
+import evolucaoRoutes from './routes/evolucao.routes.js';
+import uploadRoutes from './routes/upload.routes.js';
 import { errorHandler } from './middleware/errorHandler.js';
 
 const app = express();
 
 app.use(helmet());
-const corsOrigins = (process.env.CORS_ORIGIN || '*')
+
+// Origens permitidas:
+// - FRONTEND_URL: domínio do deploy (Vercel) — fonte da verdade em prod
+// - CORS_ORIGIN: lista CSV legada/local (localhost dev, IP da rede, staging)
+// Une os dois e deduplica. Se CORS_ORIGIN='*', mantém wildcard (apenas dev).
+const csvOrigins = (process.env.CORS_ORIGIN || '')
   .split(',')
   .map((s) => s.trim())
   .filter(Boolean);
+const frontendUrl = (process.env.FRONTEND_URL || '').trim();
+const wildcard = csvOrigins.includes('*');
+const corsOrigins = wildcard
+  ? '*'
+  : Array.from(new Set([...csvOrigins, frontendUrl].filter(Boolean)));
 app.use(cors({
-  origin: corsOrigins.includes('*') ? '*' : corsOrigins,
+  origin: corsOrigins.length === 0 ? false : corsOrigins,
   credentials: true,
 }));
 app.use(express.json({ limit: '1mb' }));
@@ -62,11 +74,24 @@ app.use('/api/rps', rpsRoutes);
 app.use('/api/strava', stravaRoutes);
 app.use('/api/exercicios', exercicioRoutes);
 app.use('/api/rotinas', rotinaRoutes);
+app.use('/api/evolucoes', evolucaoRoutes);
+app.use('/api/upload', uploadRoutes);
 
 app.use((req, res) => res.status(404).json({ error: 'NotFound', path: req.path }));
 app.use(errorHandler);
 
-const PORT = Number(process.env.PORT) || 3333;
-app.listen(PORT, () => {
-  console.log(`[apex-training] API on http://localhost:${PORT}`);
-});
+export { app };
+
+// Listen apenas quando rodado direto (não em testes que importam o módulo).
+// `import.meta.url === pathToFileURL(argv[1])` é o equivalente ESM ao
+// CommonJS `require.main === module`.
+import { fileURLToPath } from 'node:url';
+import { argv } from 'node:process';
+if (fileURLToPath(import.meta.url) === argv[1]) {
+  // Render injeta PORT — default 3000 (convenção da plataforma).
+  // 0.0.0.0 é obrigatório em containers/PaaS, senão Render derruba o serviço.
+  const PORT = Number(process.env.PORT) || 3000;
+  app.listen(PORT, '0.0.0.0', () => {
+    console.log(`[apex-training] API on port ${PORT}`);
+  });
+}
