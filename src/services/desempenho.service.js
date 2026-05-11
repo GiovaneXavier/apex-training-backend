@@ -56,27 +56,64 @@ function fmtTempoMin(min) {
 // ──────────────────────────────────────────────────────────────
 // 1. STREAK — semanas consecutivas com pelo menos 1 atividade
 //    Atividade = Treino concluído OU AtividadeStrava registrada.
-//    Limita a 2 anos pra evitar loops longos em dados antigos.
+//
+// Antes (PR pré-#7): 208 round-trips (104 semanas × 2 counts seriais)
+//   no pior caso. Dashboard piscava em ~1-2s pra atleta veterano.
+//
+// Agora: 1 SQL UNION + GROUP BY date_trunc('week') retorna no máximo
+//   ~104 linhas com a coluna `week` em texto YYYY-MM-DD. JS faz lookup
+//   O(1) num Set e conta consecutivas a partir da semana corrente.
+//
+// TZ note: comparamos em UTC (cursor via getUTC* + to_char no Postgres)
+//   pra eliminar drift entre server-local e UTC do DB. Em prod (Render
+//   UTC) é no-op; em dev BRT corrige off-by-3h em treinos late-Sunday.
 // ──────────────────────────────────────────────────────────────
+
+function inicioSemanaUTC(d = new Date()) {
+  const date = new Date(d);
+  date.setUTCHours(0, 0, 0, 0);
+  const dow = date.getUTCDay();              // 0=dom..6=sab
+  const diffParaSegunda = (dow + 6) % 7;
+  date.setUTCDate(date.getUTCDate() - diffParaSegunda);
+  return date;
+}
+
+function isoDateUTC(d) {
+  return d.toISOString().slice(0, 10);       // 'YYYY-MM-DD'
+}
+
 async function calcularStreak(alunoId) {
-  let cursor = inicioSemana();
+  const inicio = inicioSemanaUTC();
+  const limite = new Date(inicio);
+  limite.setUTCDate(limite.getUTCDate() - 104 * 7);
+
+  // UNION ALL: cada fonte filtra alunoId+janela ANTES do union, então
+  // o planner usa os índices (alunoId, dataAlvo) e (alunoId, iniciadoEm).
+  // GROUP BY no date_trunc deduplica semanas. to_char emite YYYY-MM-DD
+  // pra comparação por string (TZ-agnóstico) no JS.
+  const rows = await prisma.$queryRaw`
+    SELECT to_char(date_trunc('week', d), 'YYYY-MM-DD') AS week
+    FROM (
+      SELECT "dataAlvo" AS d
+        FROM "Treino"
+       WHERE "alunoId" = ${alunoId}
+         AND status = 'CONCLUIDO'::"StatusTreino"
+         AND "dataAlvo" >= ${limite}
+      UNION ALL
+      SELECT "iniciadoEm" AS d
+        FROM "AtividadeStrava"
+       WHERE "alunoId" = ${alunoId}
+         AND "iniciadoEm" >= ${limite}
+    ) src
+    GROUP BY date_trunc('week', d)
+  `;
+
+  const ativas = new Set(rows.map((r) => r.week));
+
+  let cursor = inicio;
   let semanas = 0;
   for (let i = 0; i < 104; i++) {
-    const fim = new Date(cursor);
-    fim.setDate(fim.getDate() + 7);
-    const [t, a] = await Promise.all([
-      prisma.treino.count({
-        where: {
-          alunoId,
-          status: 'CONCLUIDO',
-          dataAlvo: { gte: cursor, lt: fim },
-        },
-      }),
-      prisma.atividadeStrava.count({
-        where: { alunoId, iniciadoEm: { gte: cursor, lt: fim } },
-      }),
-    ]);
-    if (t === 0 && a === 0) break;
+    if (!ativas.has(isoDateUTC(cursor))) break;
     semanas++;
     cursor = new Date(cursor.getTime() - 7 * DIA_MS);
   }
