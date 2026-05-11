@@ -1,12 +1,12 @@
 import { Router } from 'express';
 
-import { requireAuth } from '../middleware/auth.middleware.js';
+import { protect } from '../middleware/auth.middleware.js';
 import { listByAluno, criar, remover } from '../controllers/prova.controller.js';
 
 const router = Router();
 
-router.post('/', requireAuth, criar);
-router.delete('/:id', requireAuth, remover);
-router.get('/:alunoId', requireAuth, listByAluno);
+router.post('/', protect, criar);
+router.delete('/:id', protect, remover);
+router.get('/:alunoId', protect, listByAluno);
 
 export default router;

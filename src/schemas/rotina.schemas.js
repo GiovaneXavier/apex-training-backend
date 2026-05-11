@@ -32,8 +32,11 @@ export const rotinaUpdateSchema = z.object({
   exercicios: z.array(rotinaExercicioInput).min(1).optional(),
 });
 
+// alunoId é OBRIGATÓRIO: o serviço usa resolveAlunoAccess para autorizar a
+// leitura. Sem alunoId não há sujeito a autorizar — antes da correção do
+// IDOR esta rota retornava rotinas globais para qualquer autenticado.
 export const rotinaListQuery = z.object({
-  alunoId: z.string().optional(),
+  alunoId: z.string().min(1, 'alunoId obrigatório'),
   diaSemana: DiaSemana.optional(),
   ativasEm: z.string().datetime().optional(), // filtra rotinas vigentes nessa data
 });

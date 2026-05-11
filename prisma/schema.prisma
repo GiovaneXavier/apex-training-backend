@@ -27,6 +27,7 @@ enum Modalidade {
   CICLISMO
   NATACAO
   TRIATHLON
+  HYROX
   OUTRO
 }
 
@@ -77,6 +78,10 @@ model User {
   nome         String
   role         Role
   avatarUrl    String?
+  // Gate de aprovação para PROFESSOR/NUTRICIONISTA. Aluno entra ativo;
+  // perfis profissionais entram inativos até aprovação manual ou
+  // verificação de email (decisão de produto pendente).
+  ativo        Boolean  @default(true)
   criadoEm     DateTime @default(now())
   atualizadoEm DateTime @updatedAt
 
@@ -85,6 +90,7 @@ model User {
   nutricionista Nutricionista?
 
   @@index([role])
+  @@index([ativo])
 }
 
 model Aluno {
@@ -150,6 +156,9 @@ model VinculoNutricionista {
   criadoEm        DateTime @default(now())
 
   @@unique([alunoId, nutricionistaId])
+  // Listagens "meus alunos aceitos" no dashboard do nutri — filtra por
+  // nutricionistaId + aceitoPeloAluno. Sem este índice, table scan em N.
+  @@index([nutricionistaId, aceitoPeloAluno])
 }
 
 // O "superpoder" JSON: detalhes contém prescricao + (opcional) execucao,
@@ -182,7 +191,9 @@ model Treino {
   titulo      String
   dataAlvo    DateTime
   status      StatusTreino  @default(PENDENTE)
-  detalhes    Json
+  // jsonb (não json): habilita operadores de containment (@>),
+  // índices GIN futuros e armazenamento binário compacto.
+  detalhes    Json          @db.JsonB
   iniciadoEm  DateTime?
   finalizadoEm DateTime?
   reagendadoDe DateTime?    // dataAlvo original antes de reagendar
@@ -191,6 +202,9 @@ model Treino {
 
   @@index([alunoId, dataAlvo])
   @@index([status])
+  // Agregações de desempenho ("treinos concluídos do mês", streak semanal)
+  // filtram por aluno + finalizadoEm. Índice composto evita table scan.
+  @@index([alunoId, finalizadoEm])
 }
 
 model Prova {
@@ -200,7 +214,7 @@ model Prova {
   modalidade Modalidade
   nome       String
   data       DateTime
-  detalhes   Json
+  detalhes   Json     @db.JsonB
   criadoEm   DateTime @default(now())
 
   @@index([alunoId, data])
@@ -234,7 +248,7 @@ model AtividadeStrava {
   ritmoMedio   Float?
   fcMedia      Int?
   iniciadoEm   DateTime
-  payloadRaw   Json
+  payloadRaw   Json     @db.JsonB
   sincronizadoEm DateTime @default(now())
 
   @@index([alunoId, iniciadoEm])
@@ -348,10 +362,10 @@ model EvolucaoCorporal {
   protocolo         String?
 
   // JSON flexível: simples (cintura única) ou ISAK completo
-  medidas           Json?
+  medidas           Json?         @db.JsonB
 
   // { frente: "url", lado: "url", costas: "url", extras: ["url"] }
-  fotos             Json?
+  fotos             Json?         @db.JsonB
 
   observacoes       String?
 

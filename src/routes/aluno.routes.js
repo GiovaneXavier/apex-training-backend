@@ -1,6 +1,6 @@
 import { Router } from 'express';
 
-import { requireAuth } from '../middleware/auth.middleware.js';
+import { protect } from '../middleware/auth.middleware.js';
 import {
   nutricionistas,
   aceitarNutri,
@@ -11,7 +11,7 @@ import {
 
 const router = Router();
 
-router.use(requireAuth);
+router.use(protect);
 
 router.get('/nutricionistas', nutricionistas);
 router.post('/nutricionistas/:vinculoId/aceitar', aceitarNutri);

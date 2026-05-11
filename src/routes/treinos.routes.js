@@ -1,6 +1,6 @@
 import { Router } from 'express';
 
-import { requireAuth } from '../middleware/auth.middleware.js';
+import { protect } from '../middleware/auth.middleware.js';
 import {
   listByAluno,
   detalhe,
@@ -13,11 +13,11 @@ import {
 const router = Router();
 
 // Ordem importa: rotas estáticas antes de paramétricas para evitar colisão
-router.post('/prescrever', requireAuth, prescrever);
-router.get('/historico-cargas', requireAuth, historico);
-router.get('/detalhe/:id', requireAuth, detalhe);
-router.post('/:id/salvar', requireAuth, salvarExecucao);
-router.delete('/:id', requireAuth, remover);
-router.get('/:alunoId', requireAuth, listByAluno);
+router.post('/prescrever', protect, prescrever);
+router.get('/historico-cargas', protect, historico);
+router.get('/detalhe/:id', protect, detalhe);
+router.post('/:id/salvar', protect, salvarExecucao);
+router.delete('/:id', protect, remover);
+router.get('/:alunoId', protect, listByAluno);
 
 export default router;

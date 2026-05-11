@@ -1,45 +1,34 @@
 import { prisma } from '../lib/prisma.js';
+import { resolveAlunoAccess } from '../lib/access.js';
 import { HttpError } from '../middleware/errorHandler.js';
 import { calcularIMC, calcularPercentualGordura } from '../lib/bodyfat.js';
 
 // ──────────────────────────────────────────────────────────────
 // Helpers de acesso
+//
+// Evolução Corporal é o ÚNICO módulo onde o nutricionista tem domínio
+// legítimo de escrita (ISAK profissional). Aqui passamos
+// `allowNutriWrite: true` no guardião canônico. Continua sendo necessário
+// `vinculo.aceitoPeloAluno === true` — a flag só destrava a escrita,
+// não bypassa o aceite.
+//
+// BUG corrigido no PR #4.1: a cópia local antiga permitia LEITURA por
+// nutri sem aceite. Agora o guardião exige aceite para qualquer acesso.
 // ──────────────────────────────────────────────────────────────
-async function resolveAlunoAccess({ user, alunoId, write = false }) {
-  if (user.role === 'ALUNO') {
-    const aluno = await prisma.aluno.findUnique({ where: { userId: user.userId } });
-    if (!aluno) throw new HttpError(404, 'Perfil de aluno não encontrado');
-    if (alunoId && alunoId !== aluno.id) throw new HttpError(403, 'Acesso negado');
-    return { aluno, avaliadorTipo: 'ALUNO' };
-  }
-  if (!alunoId) throw new HttpError(400, 'alunoId obrigatório');
 
-  if (user.role === 'PROFESSOR') {
-    const prof = await prisma.professor.findUnique({ where: { userId: user.userId } });
-    if (!prof) throw new HttpError(404, 'Professor não encontrado');
-    const v = await prisma.vinculoProfessor.findUnique({
-      where: { alunoId_professorId: { alunoId, professorId: prof.id } },
-    });
-    if (!v) throw new HttpError(403, 'Aluno não vinculado');
-    const aluno = await prisma.aluno.findUnique({ where: { id: alunoId } });
-    if (!aluno) throw new HttpError(404, 'Aluno não encontrado');
-    return { aluno, avaliadorTipo: 'PROFESSOR' };
-  }
+// Role do JWT → enum AvaliadorTipo (Prisma). Strings idênticas.
+function avaliadorTipoFromRole(role) {
+  return role; // ALUNO | PROFESSOR | NUTRICIONISTA
+}
 
-  if (user.role === 'NUTRICIONISTA') {
-    const nutri = await prisma.nutricionista.findUnique({ where: { userId: user.userId } });
-    if (!nutri) throw new HttpError(404, 'Nutricionista não encontrado');
-    const v = await prisma.vinculoNutricionista.findUnique({
-      where: { alunoId_nutricionistaId: { alunoId, nutricionistaId: nutri.id } },
-    });
-    if (!v) throw new HttpError(403, 'Aluno não vinculado');
-    if (!v.aceitoPeloAluno && write) throw new HttpError(403, 'Aluno ainda não aceitou o vínculo');
-    const aluno = await prisma.aluno.findUnique({ where: { id: alunoId } });
-    if (!aluno) throw new HttpError(404, 'Aluno não encontrado');
-    return { aluno, avaliadorTipo: 'NUTRICIONISTA' };
-  }
-
-  throw new HttpError(403, 'Acesso negado');
+async function resolveAcessoEvolucao({ user, alunoId, write = false }) {
+  const aluno = await resolveAlunoAccess({
+    user,
+    alunoId,
+    write,
+    allowNutriWrite: true, // único módulo onde NUTRI escreve legitimamente
+  });
+  return { aluno, avaliadorTipo: avaliadorTipoFromRole(user.role) };
 }
 
 // Para cálculo de %BF: deriva idade da dataNascimento do Aluno se não vier no body.
@@ -55,7 +44,7 @@ function deriveIdade(aluno, idadeAnos) {
 // CRUD
 // ──────────────────────────────────────────────────────────────
 export async function listEvolucoes({ user, filters }) {
-  const { aluno } = await resolveAlunoAccess({ user, alunoId: filters.alunoId });
+  const { aluno } = await resolveAcessoEvolucao({ user, alunoId: filters.alunoId });
   const where = { alunoId: aluno.id };
   if (filters.desde || filters.ate) {
     where.dataAvaliacao = {};
@@ -72,12 +61,12 @@ export async function listEvolucoes({ user, filters }) {
 export async function getEvolucao({ user, id }) {
   const ev = await prisma.evolucaoCorporal.findUnique({ where: { id } });
   if (!ev) throw new HttpError(404, 'Avaliação não encontrada');
-  await resolveAlunoAccess({ user, alunoId: ev.alunoId });
+  await resolveAcessoEvolucao({ user, alunoId: ev.alunoId });
   return ev;
 }
 
 export async function createEvolucao({ user, input }) {
-  const { aluno, avaliadorTipo } = await resolveAlunoAccess({
+  const { aluno, avaliadorTipo } = await resolveAcessoEvolucao({
     user, alunoId: input.alunoId, write: true,
   });
 
@@ -113,7 +102,7 @@ export async function updateEvolucao({ user, id, input }) {
   const ev = await prisma.evolucaoCorporal.findUnique({ where: { id } });
   if (!ev) throw new HttpError(404, 'Avaliação não encontrada');
 
-  const { aluno, avaliadorTipo } = await resolveAlunoAccess({
+  const { aluno, avaliadorTipo } = await resolveAcessoEvolucao({
     user, alunoId: ev.alunoId, write: true,
   });
 
@@ -154,7 +143,7 @@ export async function updateEvolucao({ user, id, input }) {
 export async function deleteEvolucao({ user, id }) {
   const ev = await prisma.evolucaoCorporal.findUnique({ where: { id } });
   if (!ev) throw new HttpError(404, 'Avaliação não encontrada');
-  const { avaliadorTipo } = await resolveAlunoAccess({ user, alunoId: ev.alunoId, write: true });
+  const { avaliadorTipo } = await resolveAcessoEvolucao({ user, alunoId: ev.alunoId, write: true });
   if (avaliadorTipo === 'ALUNO' && ev.avaliadorTipo !== 'ALUNO') {
     throw new HttpError(403, 'Aluno não pode excluir avaliação profissional');
   }

@@ -1,8 +1,16 @@
 import { prisma } from '../lib/prisma.js';
+import { resolveAlunoAccess } from '../lib/access.js';
 import { HttpError } from '../middleware/errorHandler.js';
 
 const DIAS_INDEX = { DOM: 0, SEG: 1, TER: 2, QUA: 3, QUI: 4, SEX: 5, SAB: 6 };
 const INDEX_TO_DIA = ['DOM', 'SEG', 'TER', 'QUA', 'QUI', 'SEX', 'SAB'];
+
+// ─────────────────────────────────────────────────────────────────────
+// REGRA DE OURO desta sprint:
+// Toda função pública que retorna ou modifica dados de um aluno chama
+// resolveAlunoAccess({ user, alunoId, write? }) ANTES de tocar o DB.
+// Não há exceção. Função sem `user` → bug.
+// ─────────────────────────────────────────────────────────────────────
 
 async function getProfessor(userId) {
   const prof = await prisma.professor.findUnique({ where: { userId } });
@@ -10,19 +18,16 @@ async function getProfessor(userId) {
   return prof;
 }
 
-async function ensureVinculo(professorId, alunoId) {
-  const v = await prisma.vinculoProfessor.findUnique({
-    where: { alunoId_professorId: { alunoId, professorId } },
-  });
-  if (!v) throw new HttpError(403, 'Aluno não vinculado a este professor');
-}
+// ──────────────────────────────────────────────────────────────
+// LEITURAS — todas passam pelo guardião antes de qualquer query.
+// ──────────────────────────────────────────────────────────────
 
-// ──────────────────────────────────────────────────────────────
-// CRUD de rotinas
-// ──────────────────────────────────────────────────────────────
-export async function listRotinas({ alunoId, diaSemana, ativasEm }) {
-  const where = {};
-  if (alunoId) where.alunoId = alunoId;
+export async function listRotinas({ user, alunoId, diaSemana, ativasEm }) {
+  // Guarda ACL: ALUNO só o próprio, PROFESSOR/NUTRI com vínculo
+  // (nutri exige aceitoPeloAluno=true via resolveAlunoAccess).
+  const aluno = await resolveAlunoAccess({ user, alunoId });
+
+  const where = { alunoId: aluno.id };
   if (diaSemana) where.diaSemana = diaSemana;
   if (ativasEm) {
     const data = new Date(ativasEm);
@@ -42,23 +47,55 @@ export async function listRotinas({ alunoId, diaSemana, ativasEm }) {
   });
 }
 
-export async function getRotina(id) {
-  const r = await prisma.rotinaMusculacao.findUnique({
+export async function getRotina({ user, id }) {
+  // Carrega só o que precisamos pra autorizar — sem hidratar exercícios
+  // antes da checagem (evita gastar query custosa em request não-autorizada).
+  const meta = await prisma.rotinaMusculacao.findUnique({
+    where: { id },
+    select: { id: true, alunoId: true },
+  });
+  if (!meta) throw new HttpError(404, 'Rotina não encontrada');
+
+  await resolveAlunoAccess({ user, alunoId: meta.alunoId });
+
+  return prisma.rotinaMusculacao.findUnique({
     where: { id },
     include: {
       exercicios: { orderBy: { ordem: 'asc' }, include: { exercicio: true } },
       aluno: { include: { user: { select: { nome: true } } } },
     },
   });
-  if (!r) throw new HttpError(404, 'Rotina não encontrada');
-  return r;
 }
 
-export async function createRotina(userId, data) {
-  const prof = await getProfessor(userId);
-  await ensureVinculo(prof.id, data.alunoId);
+// "Treino de hoje" — rotinas vigentes do aluno hoje.
+// Agora exige guardião: antes era acessível por qualquer autenticado.
+export async function rotinasDoDia({ user, alunoId, dataRef = new Date() }) {
+  const aluno = await resolveAlunoAccess({ user, alunoId });
+  const dia = INDEX_TO_DIA[dataRef.getDay()];
+  return prisma.rotinaMusculacao.findMany({
+    where: {
+      alunoId: aluno.id,
+      diaSemana: dia,
+      vigenciaInicio: { lte: dataRef },
+      OR: [{ vigenciaFim: null }, { vigenciaFim: { gte: dataRef } }],
+    },
+    include: {
+      exercicios: { orderBy: { ordem: 'asc' }, include: { exercicio: true } },
+    },
+    orderBy: { criadoEm: 'asc' },
+  });
+}
 
-  // Sugestão: 3 meses máximo. Se vigenciaFim ausente, alerta apenas (não bloqueia).
+// ──────────────────────────────────────────────────────────────
+// MUTAÇÕES — write=true no guardião. NUTRI sempre 403 aqui.
+// ──────────────────────────────────────────────────────────────
+
+export async function createRotina(userId, data) {
+  const user = { role: 'PROFESSOR', userId };
+  // Rota já exige role=PROFESSOR; aqui validamos vínculo via guardião.
+  await resolveAlunoAccess({ user, alunoId: data.alunoId, write: true });
+  const prof = await getProfessor(userId);
+
   return prisma.rotinaMusculacao.create({
     data: {
       alunoId: data.alunoId,
@@ -87,14 +124,22 @@ export async function createRotina(userId, data) {
 }
 
 export async function updateRotina(userId, id, data) {
-  const prof = await getProfessor(userId);
-  const r = await prisma.rotinaMusculacao.findUnique({ where: { id } });
+  const r = await prisma.rotinaMusculacao.findUnique({
+    where: { id },
+    select: { id: true, alunoId: true, professorId: true },
+  });
   if (!r) throw new HttpError(404, 'Rotina não encontrada');
+
+  // Guardião valida vínculo professor↔aluno. Ownership da rotina é checado
+  // separado: professor X não pode editar rotina prescrita por professor Y
+  // pro mesmo aluno mesmo tendo vínculo.
+  const user = { role: 'PROFESSOR', userId };
+  await resolveAlunoAccess({ user, alunoId: r.alunoId, write: true });
+  const prof = await getProfessor(userId);
   if (r.professorId !== prof.id) throw new HttpError(403, 'Você não é dono desta rotina');
 
   return prisma.$transaction(async (tx) => {
     if (data.exercicios) {
-      // Substitui lista — apaga e recria. Treinos já gerados não são afetados.
       await tx.rotinaExercicio.deleteMany({ where: { rotinaId: id } });
     }
     return tx.rotinaMusculacao.update({
@@ -127,13 +172,18 @@ export async function updateRotina(userId, id, data) {
 }
 
 export async function deleteRotina(userId, id) {
-  const prof = await getProfessor(userId);
-  const r = await prisma.rotinaMusculacao.findUnique({ where: { id } });
+  const r = await prisma.rotinaMusculacao.findUnique({
+    where: { id },
+    select: { id: true, alunoId: true, professorId: true },
+  });
   if (!r) throw new HttpError(404, 'Rotina não encontrada');
+
+  const user = { role: 'PROFESSOR', userId };
+  await resolveAlunoAccess({ user, alunoId: r.alunoId, write: true });
+  const prof = await getProfessor(userId);
   if (r.professorId !== prof.id) throw new HttpError(403, 'Você não é dono desta rotina');
 
   // Cascata: remove rotina + treinos PENDENTES gerados a partir dela.
-  // Treinos CONCLUIDO/EM_EXECUCAO ficam, mas com rotinaId virando null (SetNull).
   await prisma.$transaction(async (tx) => {
     await tx.treino.deleteMany({
       where: { rotinaId: id, status: 'PENDENTE' },
@@ -145,40 +195,22 @@ export async function deleteRotina(userId, id) {
 }
 
 // ──────────────────────────────────────────────────────────────
-// "Treino de hoje" — rotinas vigentes do aluno hoje
-// ──────────────────────────────────────────────────────────────
-export async function rotinasDoDia(alunoId, dataRef = new Date()) {
-  const dia = INDEX_TO_DIA[dataRef.getDay()];
-  return prisma.rotinaMusculacao.findMany({
-    where: {
-      alunoId,
-      diaSemana: dia,
-      vigenciaInicio: { lte: dataRef },
-      OR: [{ vigenciaFim: null }, { vigenciaFim: { gte: dataRef } }],
-    },
-    include: {
-      exercicios: { orderBy: { ordem: 'asc' }, include: { exercicio: true } },
-    },
-    orderBy: { criadoEm: 'asc' },
-  });
-}
-
-// ──────────────────────────────────────────────────────────────
-// Iniciar treino a partir de uma rotina — gera instância de Treino
-// snapshotando os exercícios no campo `detalhes` (JSON).
+// Iniciar treino a partir de uma rotina — ALUNO only.
+// O guardião confirma que `rotina.alunoId` é o aluno corrente.
 // ──────────────────────────────────────────────────────────────
 export async function iniciarTreinoDeRotina(userId, rotinaId, dataAlvo) {
-  const aluno = await prisma.aluno.findUnique({ where: { userId } });
-  if (!aluno) throw new HttpError(403, 'Apenas alunos podem iniciar treinos');
+  const user = { role: 'ALUNO', userId };
+  // Acesso "global" do aluno (sem alunoId) — só pra confirmar perfil existe.
+  const aluno = await resolveAlunoAccess({ user });
 
   const rotina = await prisma.rotinaMusculacao.findUnique({
     where: { id: rotinaId },
     include: { exercicios: { orderBy: { ordem: 'asc' }, include: { exercicio: true } } },
   });
   if (!rotina) throw new HttpError(404, 'Rotina não encontrada');
+  // Re-checa ownership do aluno sobre a rotina.
   if (rotina.alunoId !== aluno.id) throw new HttpError(403, 'Esta rotina não é sua');
 
-  // Reaproveita instância pendente do mesmo dia se já existir
   const dia = dataAlvo ? new Date(dataAlvo) : new Date();
   const inicio = new Date(dia); inicio.setHours(0, 0, 0, 0);
   const fim = new Date(dia); fim.setHours(23, 59, 59, 999);
@@ -227,11 +259,11 @@ export async function iniciarTreinoDeRotina(userId, rotinaId, dataAlvo) {
 }
 
 // ──────────────────────────────────────────────────────────────
-// Reagendar treino — aluno move dataAlvo
+// Reagendar treino — ALUNO only.
 // ──────────────────────────────────────────────────────────────
 export async function reagendarTreino(userId, treinoId, novaDataAlvo) {
-  const aluno = await prisma.aluno.findUnique({ where: { userId } });
-  if (!aluno) throw new HttpError(403, 'Apenas alunos podem reagendar');
+  const user = { role: 'ALUNO', userId };
+  const aluno = await resolveAlunoAccess({ user });
 
   const t = await prisma.treino.findUnique({ where: { id: treinoId } });
   if (!t) throw new HttpError(404, 'Treino não encontrado');
@@ -244,7 +276,7 @@ export async function reagendarTreino(userId, treinoId, novaDataAlvo) {
     where: { id: treinoId },
     data: {
       dataAlvo: new Date(novaDataAlvo),
-      reagendadoDe: t.reagendadoDe ?? t.dataAlvo, // preserva primeira data original
+      reagendadoDe: t.reagendadoDe ?? t.dataAlvo,
     },
   });
 }

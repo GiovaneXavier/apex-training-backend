@@ -1,24 +1,13 @@
 import 'dotenv/config';
+
+// Validação fail-fast de TODAS as envs antes de qualquer outra coisa.
+// Se faltar algo crítico (ou estiver mal formado), o processo termina aqui
+// com mensagem clara em vez de quebrar no primeiro request.
+import { env } from './lib/env.js';
+
 import express from 'express';
-
-// Validação fail-fast de segredos críticos.
-// Em produção, JWT_SECRET ausente, vazio ou com placeholders conhecidos
-// faz o processo terminar — preferir derrubar a subir inseguro.
-const JWT_SECRET = process.env.JWT_SECRET ?? '';
-const PLACEHOLDER_SECRETS = new Set([
-  '', 'change-me', 'change-me-in-production', 'secret', 'changeme',
-]);
-if (process.env.NODE_ENV === 'production') {
-  if (PLACEHOLDER_SECRETS.has(JWT_SECRET) || JWT_SECRET.length < 32) {
-    console.error('[apex-training] FATAL: JWT_SECRET ausente, fraco ou placeholder em produção.');
-    console.error('Gere com: node -e "console.log(require(\\"crypto\\").randomBytes(48).toString(\\"base64\\"))"');
-    process.exit(1);
-  }
-} else if (PLACEHOLDER_SECRETS.has(JWT_SECRET)) {
-  console.warn('[apex-training] aviso: JWT_SECRET é placeholder. OK em dev, NÃO suba pra produção.');
-}
-
 import cors from 'cors';
+import cookieParser from 'cookie-parser';
 import helmet from 'helmet';
 import morgan from 'morgan';
 
@@ -38,27 +27,24 @@ import { errorHandler } from './middleware/errorHandler.js';
 
 const app = express();
 
+// Render/Vercel/Heroku ficam atrás de load balancer; sem trust proxy,
+// req.ip vira o IP do LB e o rate-limit por IP fica inútil. 1 = um
+// nível de proxy (suficiente pras plataformas que usamos).
+if (env.isProd) app.set('trust proxy', 1);
+
 app.use(helmet());
 
-// Origens permitidas:
-// - FRONTEND_URL: domínio do deploy (Vercel) — fonte da verdade em prod
-// - CORS_ORIGIN: lista CSV legada/local (localhost dev, IP da rede, staging)
-// Une os dois e deduplica. Se CORS_ORIGIN='*', mantém wildcard (apenas dev).
-const csvOrigins = (process.env.CORS_ORIGIN || '')
-  .split(',')
-  .map((s) => s.trim())
-  .filter(Boolean);
-const frontendUrl = (process.env.FRONTEND_URL || '').trim();
-const wildcard = csvOrigins.includes('*');
-const corsOrigins = wildcard
-  ? '*'
-  : Array.from(new Set([...csvOrigins, frontendUrl].filter(Boolean)));
+// Origens CORS já normalizadas/deduplicadas em env.corsOrigins.
+// Wildcard '*' só é permitido em dev (validação em env.js bloqueia em prod).
 app.use(cors({
-  origin: corsOrigins.length === 0 ? false : corsOrigins,
+  origin: env.corsOrigins === '*'
+    ? '*'
+    : (env.corsOrigins.length === 0 ? false : env.corsOrigins),
   credentials: true,
 }));
 app.use(express.json({ limit: '1mb' }));
-app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
+app.use(cookieParser());
+app.use(morgan(env.isProd ? 'combined' : 'dev'));
 
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', service: 'apex-training-backend', version: '0.1.0' });
@@ -83,15 +69,11 @@ app.use(errorHandler);
 export { app };
 
 // Listen apenas quando rodado direto (não em testes que importam o módulo).
-// `import.meta.url === pathToFileURL(argv[1])` é o equivalente ESM ao
-// CommonJS `require.main === module`.
 import { fileURLToPath } from 'node:url';
 import { argv } from 'node:process';
 if (fileURLToPath(import.meta.url) === argv[1]) {
-  // Render injeta PORT — default 3000 (convenção da plataforma).
-  // 0.0.0.0 é obrigatório em containers/PaaS, senão Render derruba o serviço.
-  const PORT = Number(process.env.PORT) || 3000;
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`[apex-training] API on port ${PORT}`);
+  // 0.0.0.0 é obrigatório em containers/PaaS.
+  app.listen(env.PORT, '0.0.0.0', () => {
+    console.log(`[apex-training] API on port ${env.PORT} (${env.NODE_ENV})`);
   });
 }

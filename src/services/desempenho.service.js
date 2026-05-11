@@ -1,4 +1,5 @@
 import { prisma } from '../lib/prisma.js';
+import { resolveAlunoAccess } from '../lib/access.js';
 import { HttpError } from '../middleware/errorHandler.js';
 
 const DIA_MS = 86400000;
@@ -247,45 +248,17 @@ async function calcularEstimativasProva(alunoId) {
 }
 
 // ──────────────────────────────────────────────────────────────
-// Acesso: mesma regra do treino — aluno só vê seu; prof/nutri
-// precisa de vínculo (nutri precisa aceitação para ler? aqui
-// dados agregados são só leitura, libera com vínculo apenas).
-// ──────────────────────────────────────────────────────────────
-async function ensureAccess(user, alunoId) {
-  if (user.role === 'ALUNO') {
-    const aluno = await prisma.aluno.findUnique({ where: { userId: user.userId } });
-    if (!aluno) throw new HttpError(404, 'Perfil de aluno não encontrado');
-    if (alunoId && alunoId !== aluno.id) throw new HttpError(403, 'Acesso negado');
-    return aluno.id;
-  }
-  if (!alunoId) throw new HttpError(400, 'alunoId obrigatório');
-
-  if (user.role === 'PROFESSOR') {
-    const prof = await prisma.professor.findUnique({ where: { userId: user.userId } });
-    if (!prof) throw new HttpError(403, 'Acesso negado');
-    const v = await prisma.vinculoProfessor.findUnique({
-      where: { alunoId_professorId: { alunoId, professorId: prof.id } },
-    });
-    if (!v) throw new HttpError(403, 'Aluno não vinculado');
-    return alunoId;
-  }
-  if (user.role === 'NUTRICIONISTA') {
-    const nutri = await prisma.nutricionista.findUnique({ where: { userId: user.userId } });
-    if (!nutri) throw new HttpError(403, 'Acesso negado');
-    const v = await prisma.vinculoNutricionista.findUnique({
-      where: { alunoId_nutricionistaId: { alunoId, nutricionistaId: nutri.id } },
-    });
-    if (!v) throw new HttpError(403, 'Aluno não vinculado');
-    return alunoId;
-  }
-  throw new HttpError(403, 'Acesso negado');
-}
-
-// ──────────────────────────────────────────────────────────────
 // Endpoint principal
+//
+// Acesso via guardião canônico (../lib/access.js). Mudança importante
+// no PR #4.1: a cópia local `ensureAccess` permitia que NUTRI sem
+// `aceitoPeloAluno === true` visualizasse dados agregados. Agora,
+// estatísticas são tratadas como qualquer outro dado do aluno — exigem
+// aceite. Read-only, então `write` fica false (default).
 // ──────────────────────────────────────────────────────────────
 export async function getDesempenho({ user, alunoId }) {
-  const id = await ensureAccess(user, alunoId);
+  const aluno = await resolveAlunoAccess({ user, alunoId });
+  const id = aluno.id;
   const [streak, resumoMes, ciclo, estimativasProva] = await Promise.all([
     calcularStreak(id),
     calcularResumoMes(id),
