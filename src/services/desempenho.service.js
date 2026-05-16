@@ -1,4 +1,5 @@
 import { prisma } from '../lib/prisma.js';
+import { resolveAlunoAccess } from '../lib/access.js';
 import { HttpError } from '../middleware/errorHandler.js';
 
 const DIA_MS = 86400000;
@@ -55,27 +56,64 @@ function fmtTempoMin(min) {
 // ──────────────────────────────────────────────────────────────
 // 1. STREAK — semanas consecutivas com pelo menos 1 atividade
 //    Atividade = Treino concluído OU AtividadeStrava registrada.
-//    Limita a 2 anos pra evitar loops longos em dados antigos.
+//
+// Antes (PR pré-#7): 208 round-trips (104 semanas × 2 counts seriais)
+//   no pior caso. Dashboard piscava em ~1-2s pra atleta veterano.
+//
+// Agora: 1 SQL UNION + GROUP BY date_trunc('week') retorna no máximo
+//   ~104 linhas com a coluna `week` em texto YYYY-MM-DD. JS faz lookup
+//   O(1) num Set e conta consecutivas a partir da semana corrente.
+//
+// TZ note: comparamos em UTC (cursor via getUTC* + to_char no Postgres)
+//   pra eliminar drift entre server-local e UTC do DB. Em prod (Render
+//   UTC) é no-op; em dev BRT corrige off-by-3h em treinos late-Sunday.
 // ──────────────────────────────────────────────────────────────
+
+function inicioSemanaUTC(d = new Date()) {
+  const date = new Date(d);
+  date.setUTCHours(0, 0, 0, 0);
+  const dow = date.getUTCDay();              // 0=dom..6=sab
+  const diffParaSegunda = (dow + 6) % 7;
+  date.setUTCDate(date.getUTCDate() - diffParaSegunda);
+  return date;
+}
+
+function isoDateUTC(d) {
+  return d.toISOString().slice(0, 10);       // 'YYYY-MM-DD'
+}
+
 async function calcularStreak(alunoId) {
-  let cursor = inicioSemana();
+  const inicio = inicioSemanaUTC();
+  const limite = new Date(inicio);
+  limite.setUTCDate(limite.getUTCDate() - 104 * 7);
+
+  // UNION ALL: cada fonte filtra alunoId+janela ANTES do union, então
+  // o planner usa os índices (alunoId, dataAlvo) e (alunoId, iniciadoEm).
+  // GROUP BY no date_trunc deduplica semanas. to_char emite YYYY-MM-DD
+  // pra comparação por string (TZ-agnóstico) no JS.
+  const rows = await prisma.$queryRaw`
+    SELECT to_char(date_trunc('week', d), 'YYYY-MM-DD') AS week
+    FROM (
+      SELECT "dataAlvo" AS d
+        FROM "Treino"
+       WHERE "alunoId" = ${alunoId}
+         AND status = 'CONCLUIDO'::"StatusTreino"
+         AND "dataAlvo" >= ${limite}
+      UNION ALL
+      SELECT "iniciadoEm" AS d
+        FROM "AtividadeStrava"
+       WHERE "alunoId" = ${alunoId}
+         AND "iniciadoEm" >= ${limite}
+    ) src
+    GROUP BY date_trunc('week', d)
+  `;
+
+  const ativas = new Set(rows.map((r) => r.week));
+
+  let cursor = inicio;
   let semanas = 0;
   for (let i = 0; i < 104; i++) {
-    const fim = new Date(cursor);
-    fim.setDate(fim.getDate() + 7);
-    const [t, a] = await Promise.all([
-      prisma.treino.count({
-        where: {
-          alunoId,
-          status: 'CONCLUIDO',
-          dataAlvo: { gte: cursor, lt: fim },
-        },
-      }),
-      prisma.atividadeStrava.count({
-        where: { alunoId, iniciadoEm: { gte: cursor, lt: fim } },
-      }),
-    ]);
-    if (t === 0 && a === 0) break;
+    if (!ativas.has(isoDateUTC(cursor))) break;
     semanas++;
     cursor = new Date(cursor.getTime() - 7 * DIA_MS);
   }
@@ -247,45 +285,17 @@ async function calcularEstimativasProva(alunoId) {
 }
 
 // ──────────────────────────────────────────────────────────────
-// Acesso: mesma regra do treino — aluno só vê seu; prof/nutri
-// precisa de vínculo (nutri precisa aceitação para ler? aqui
-// dados agregados são só leitura, libera com vínculo apenas).
-// ──────────────────────────────────────────────────────────────
-async function ensureAccess(user, alunoId) {
-  if (user.role === 'ALUNO') {
-    const aluno = await prisma.aluno.findUnique({ where: { userId: user.userId } });
-    if (!aluno) throw new HttpError(404, 'Perfil de aluno não encontrado');
-    if (alunoId && alunoId !== aluno.id) throw new HttpError(403, 'Acesso negado');
-    return aluno.id;
-  }
-  if (!alunoId) throw new HttpError(400, 'alunoId obrigatório');
-
-  if (user.role === 'PROFESSOR') {
-    const prof = await prisma.professor.findUnique({ where: { userId: user.userId } });
-    if (!prof) throw new HttpError(403, 'Acesso negado');
-    const v = await prisma.vinculoProfessor.findUnique({
-      where: { alunoId_professorId: { alunoId, professorId: prof.id } },
-    });
-    if (!v) throw new HttpError(403, 'Aluno não vinculado');
-    return alunoId;
-  }
-  if (user.role === 'NUTRICIONISTA') {
-    const nutri = await prisma.nutricionista.findUnique({ where: { userId: user.userId } });
-    if (!nutri) throw new HttpError(403, 'Acesso negado');
-    const v = await prisma.vinculoNutricionista.findUnique({
-      where: { alunoId_nutricionistaId: { alunoId, nutricionistaId: nutri.id } },
-    });
-    if (!v) throw new HttpError(403, 'Aluno não vinculado');
-    return alunoId;
-  }
-  throw new HttpError(403, 'Acesso negado');
-}
-
-// ──────────────────────────────────────────────────────────────
 // Endpoint principal
+//
+// Acesso via guardião canônico (../lib/access.js). Mudança importante
+// no PR #4.1: a cópia local `ensureAccess` permitia que NUTRI sem
+// `aceitoPeloAluno === true` visualizasse dados agregados. Agora,
+// estatísticas são tratadas como qualquer outro dado do aluno — exigem
+// aceite. Read-only, então `write` fica false (default).
 // ──────────────────────────────────────────────────────────────
 export async function getDesempenho({ user, alunoId }) {
-  const id = await ensureAccess(user, alunoId);
+  const aluno = await resolveAlunoAccess({ user, alunoId });
+  const id = aluno.id;
   const [streak, resumoMes, ciclo, estimativasProva] = await Promise.all([
     calcularStreak(id),
     calcularResumoMes(id),

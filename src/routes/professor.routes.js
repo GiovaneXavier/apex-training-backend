@@ -1,6 +1,6 @@
 import { Router } from 'express';
 
-import { requireAuth } from '../middleware/auth.middleware.js';
+import { protect } from '../middleware/auth.middleware.js';
 import {
   alunos,
   vincular,
@@ -12,7 +12,7 @@ import {
 
 const router = Router();
 
-router.use(requireAuth);
+router.use(protect);
 
 router.get('/dashboard', dashboard);
 router.get('/calendario', calendario);

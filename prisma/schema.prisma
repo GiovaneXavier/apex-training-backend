@@ -27,6 +27,7 @@ enum Modalidade {
   CICLISMO
   NATACAO
   TRIATHLON
+  HYROX
   OUTRO
 }
 
@@ -77,6 +78,10 @@ model User {
   nome         String
   role         Role
   avatarUrl    String?
+  // Gate de aprovação para PROFESSOR/NUTRICIONISTA. Aluno entra ativo;
+  // perfis profissionais entram inativos até aprovação manual ou
+  // verificação de email (decisão de produto pendente).
+  ativo        Boolean  @default(true)
   criadoEm     DateTime @default(now())
   atualizadoEm DateTime @updatedAt
 
@@ -85,6 +90,7 @@ model User {
   nutricionista Nutricionista?
 
   @@index([role])
+  @@index([ativo])
 }
 
 model Aluno {
@@ -150,6 +156,9 @@ model VinculoNutricionista {
   criadoEm        DateTime @default(now())
 
   @@unique([alunoId, nutricionistaId])
+  // Listagens "meus alunos aceitos" no dashboard do nutri — filtra por
+  // nutricionistaId + aceitoPeloAluno. Sem este índice, table scan em N.
+  @@index([nutricionistaId, aceitoPeloAluno])
 }
 
 // O "superpoder" JSON: detalhes contém prescricao + (opcional) execucao,
@@ -182,7 +191,9 @@ model Treino {
   titulo      String
   dataAlvo    DateTime
   status      StatusTreino  @default(PENDENTE)
-  detalhes    Json
+  // jsonb (não json): habilita operadores de containment (@>),
+  // índices GIN futuros e armazenamento binário compacto.
+  detalhes    Json          @db.JsonB
   iniciadoEm  DateTime?
   finalizadoEm DateTime?
   reagendadoDe DateTime?    // dataAlvo original antes de reagendar
@@ -191,6 +202,13 @@ model Treino {
 
   @@index([alunoId, dataAlvo])
   @@index([status])
+  // Agregações de desempenho ("treinos concluídos do mês", streak semanal)
+  // filtram por aluno + finalizadoEm. Índice composto evita table scan.
+  @@index([alunoId, finalizadoEm])
+  // GIN com jsonb_path_ops — suporta operator @> usado em historicoCargas.
+  // Aplicado no PR #7 via raw SQL; declarado aqui no PR #10 pra alinhar
+  // o schema com o DB e parar o drift detection do Prisma.
+  @@index([detalhes(ops: JsonbPathOps)], type: Gin, map: "Treino_detalhes_gin_idx")
 }
 
 model Prova {
@@ -200,12 +218,18 @@ model Prova {
   modalidade Modalidade
   nome       String
   data       DateTime
-  detalhes   Json
+  detalhes   Json     @db.JsonB
   criadoEm   DateTime @default(now())
 
   @@index([alunoId, data])
 }
 
+// Modelo de RP "ativo": uma linha por combinação (alunoId, exercicio,
+// metrica, reps). Quando o aluno bate um valor maior, a linha é
+// ATUALIZADA (valor + treinoId + dataRecorde) em vez de criar histórico.
+// Trade-off consciente do PR #10: simplifica race protection e o modelo
+// de leitura. Histórico granular de evolução do RP fica derivável das
+// execuções (Treino.detalhes) caso necessário no futuro.
 model RecordePessoal {
   id         String     @id @default(cuid())
   alunoId    String
@@ -219,6 +243,13 @@ model RecordePessoal {
   dataRecorde DateTime  @default(now())
   treinoId   String?
 
+  // Constraint do PR #10: garante 1 RP ativo por combinação no DB.
+  // INSERT concorrente com mesma chave gera P2002 — capturado pelo
+  // service e tratado como race recovery.
+  // Postgres permite duplicatas com reps=NULL (NULL é distinto por
+  // default) — aceitável: modalidades sem reps têm exercicios únicos
+  // por distância, sem janela de race real.
+  @@unique([alunoId, exercicio, metrica, reps], name: "RecordePessoal_ativo_unq")
   @@index([alunoId, exercicio])
 }
 
@@ -234,7 +265,7 @@ model AtividadeStrava {
   ritmoMedio   Float?
   fcMedia      Int?
   iniciadoEm   DateTime
-  payloadRaw   Json
+  payloadRaw   Json     @db.JsonB
   sincronizadoEm DateTime @default(now())
 
   @@index([alunoId, iniciadoEm])
@@ -348,10 +379,10 @@ model EvolucaoCorporal {
   protocolo         String?
 
   // JSON flexível: simples (cintura única) ou ISAK completo
-  medidas           Json?
+  medidas           Json?         @db.JsonB
 
   // { frente: "url", lado: "url", costas: "url", extras: ["url"] }
-  fotos             Json?
+  fotos             Json?         @db.JsonB
 
   observacoes       String?
 
