@@ -205,6 +205,10 @@ model Treino {
   // Agregações de desempenho ("treinos concluídos do mês", streak semanal)
   // filtram por aluno + finalizadoEm. Índice composto evita table scan.
   @@index([alunoId, finalizadoEm])
+  // GIN com jsonb_path_ops — suporta operator @> usado em historicoCargas.
+  // Aplicado no PR #7 via raw SQL; declarado aqui no PR #10 pra alinhar
+  // o schema com o DB e parar o drift detection do Prisma.
+  @@index([detalhes(ops: JsonbPathOps)], type: Gin, map: "Treino_detalhes_gin_idx")
 }
 
 model Prova {
@@ -220,6 +224,12 @@ model Prova {
   @@index([alunoId, data])
 }
 
+// Modelo de RP "ativo": uma linha por combinação (alunoId, exercicio,
+// metrica, reps). Quando o aluno bate um valor maior, a linha é
+// ATUALIZADA (valor + treinoId + dataRecorde) em vez de criar histórico.
+// Trade-off consciente do PR #10: simplifica race protection e o modelo
+// de leitura. Histórico granular de evolução do RP fica derivável das
+// execuções (Treino.detalhes) caso necessário no futuro.
 model RecordePessoal {
   id         String     @id @default(cuid())
   alunoId    String
@@ -233,6 +243,13 @@ model RecordePessoal {
   dataRecorde DateTime  @default(now())
   treinoId   String?
 
+  // Constraint do PR #10: garante 1 RP ativo por combinação no DB.
+  // INSERT concorrente com mesma chave gera P2002 — capturado pelo
+  // service e tratado como race recovery.
+  // Postgres permite duplicatas com reps=NULL (NULL é distinto por
+  // default) — aceitável: modalidades sem reps têm exercicios únicos
+  // por distância, sem janela de race real.
+  @@unique([alunoId, exercicio, metrica, reps], name: "RecordePessoal_ativo_unq")
   @@index([alunoId, exercicio])
 }
 
