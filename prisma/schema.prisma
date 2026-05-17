@@ -249,8 +249,12 @@ model RecordePessoal {
   // INSERT concorrente com mesma chave gera P2002 — capturado pelo
   // service e tratado como race recovery.
   // Postgres permite duplicatas com reps=NULL (NULL é distinto por
-  // default) — aceitável: modalidades sem reps têm exercicios únicos
-  // por distância, sem janela de race real.
+  // default) — pra resolver isso no caso de pace (endurance), o PR #19
+  // adicionou via raw SQL um UNIQUE PARCIAL `RecordePessoal_pace_unq`:
+  //   ON (alunoId, exercicio, metrica) WHERE reps IS NULL
+  // Prisma migrate ainda não emite o WHERE em unique nativo; o índice
+  // vive na migration `20260517190000_rp_pace_unique`. Service captura
+  // P2002 e aplica update lower-is-better via predicado `valor > novo`.
   @@unique([alunoId, exercicio, metrica, reps], name: "RecordePessoal_ativo_unq")
   @@index([alunoId, exercicio])
 }

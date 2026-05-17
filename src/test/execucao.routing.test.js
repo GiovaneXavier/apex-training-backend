@@ -24,6 +24,10 @@ mock.module('../lib/prisma.js', {
       // evitar caminhos de RP. Os testes de race vivem em execucao.race.test.js.
       recordePessoal: {
         findUnique: async () => null,
+        // PR #19 — service de pace usa findFirst (não findUnique) por
+        // causa do unique parcial. Stub aqui pra não quebrar os testes
+        // de routing que cobrem caminhos de corrida.
+        findFirst: async () => null,
         create: async ({ data }) => ({ id: 'rp-x', ...data, dataRecorde: new Date() }),
         updateMany: async () => ({ count: 0 }),
       },

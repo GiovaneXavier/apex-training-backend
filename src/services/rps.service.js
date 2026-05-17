@@ -29,12 +29,29 @@ export async function listRPsByAluno({ user, alunoId, filters }) {
   }
 
   const grouped = Array.from(byExercicio.entries()).map(([exercicio, rs]) => {
-    // Para cada exercício: top RP global = maior valor; e melhor por reps
-    const top = rs.reduce((max, r) => (r.valor > max.valor ? r : max), rs[0]);
+    // PR #19 — direção do "top" depende da métrica:
+    //   - kg_x_reps (musculação): higher-is-better (maior carga)
+    //   - pace (endurance):       lower-is-better (menor s/km)
+    // Todas as linhas de um mesmo exercicio compartilham a mesma
+    // métrica pelo modelo, então inferimos pela primeira.
+    const lowerIsBetter = rs[0]?.metrica === 'pace';
+    const top = rs.reduce(
+      (best, r) => {
+        const venceu = lowerIsBetter ? r.valor < best.valor : r.valor > best.valor;
+        return venceu ? r : best;
+      },
+      rs[0],
+    );
     const porReps = new Map();
     for (const r of rs) {
       const k = r.reps ?? 0;
-      if (!porReps.has(k) || porReps.get(k).valor < r.valor) porReps.set(k, r);
+      const atual = porReps.get(k);
+      if (!atual) {
+        porReps.set(k, r);
+        continue;
+      }
+      const novoMelhor = lowerIsBetter ? r.valor < atual.valor : r.valor > atual.valor;
+      if (novoMelhor) porReps.set(k, r);
     }
     return {
       exercicio,
