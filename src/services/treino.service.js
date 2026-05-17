@@ -49,6 +49,61 @@ export async function prescreverTreino({ user, input }) {
   });
 }
 
+// PR #16 — clonar treino prescrito (reaproveitamento de carga).
+//
+// O caso de uso: prof já prescreveu o treino de natação de quarta e
+// quer aplicar o mesmo template na semana seguinte sem redigitar 8
+// blocos de séries. Pega o `detalhes` original, zera o `realizado` (se
+// houver) e grava como PENDENTE numa nova `dataAlvo`.
+//
+// Sanitização: o `realizado` pode existir em detalhes de treinos já
+// executados ou em progresso. Limpamos pra que o clone nasça virgem.
+//   - musculacao: cada exercicios[i].realizado vira []
+//   - corrida/ciclismo/natacao/hyrox/outro: realizado vira null
+// O `tipo` e a prescrição em si seguem inalterados.
+//
+// Auth: usa o mesmo guard de `prescreverTreino` (PROFESSOR + vínculo).
+// Idempotência: não tem — chamar 2x cria 2 treinos. Frontend desabilita
+// o botão durante o POST. Janela de race muito curta na prática.
+export async function clonarTreino({ user, treinoId, dataAlvo }) {
+  if (user.role !== 'PROFESSOR') throw new HttpError(403, 'Apenas professores podem clonar treinos');
+
+  const origem = await prisma.treino.findUnique({ where: { id: treinoId } });
+  if (!origem) throw new HttpError(404, 'Treino de origem não encontrado');
+
+  const prof = await prisma.professor.findUnique({ where: { userId: user.userId } });
+  if (!prof) throw new HttpError(404, 'Perfil de professor não encontrado');
+
+  await resolveAlunoAccess({ user, alunoId: origem.alunoId, write: true });
+
+  const detalhesLimpos = limparExecucao(origem.detalhes);
+
+  return prisma.treino.create({
+    data: {
+      alunoId: origem.alunoId,
+      professorId: prof.id,
+      rotinaId: origem.rotinaId, // mantém o link à rotina-mãe se houver
+      modalidade: origem.modalidade,
+      titulo: origem.titulo,
+      dataAlvo: new Date(dataAlvo),
+      detalhes: detalhesLimpos,
+      status: 'PENDENTE',
+    },
+  });
+}
+
+function limparExecucao(detalhes) {
+  if (!detalhes || typeof detalhes !== 'object') return detalhes;
+  const clone = JSON.parse(JSON.stringify(detalhes));
+
+  if (clone.tipo === 'musculacao' && Array.isArray(clone.exercicios)) {
+    clone.exercicios = clone.exercicios.map((ex) => ({ ...ex, realizado: [] }));
+  } else if ('realizado' in clone) {
+    clone.realizado = null;
+  }
+  return clone;
+}
+
 export async function deleteTreino({ user, treinoId }) {
   const treino = await prisma.treino.findUnique({ where: { id: treinoId } });
   if (!treino) throw new HttpError(404, 'Treino não encontrado');

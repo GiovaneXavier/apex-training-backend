@@ -253,6 +253,25 @@ export const prescreverSchema = z.object({
   detalhes: treinoDetalhes,
 });
 
+// PR #16 — janela para `dataAlvo` no clone. Mais ampla que iniciar
+// (rotinas), pois clonar é prescrição: prof pode agendar treino pra
+// semana futura ou registrar lote retroativo após reset.
+//   - até  +180 dias no futuro (1 trimestre de pré-prescrição)
+//   - até  -90 dias no passado  (lote de catch-up)
+const CLONE_FUT_MS = 180 * 24 * 60 * 60 * 1000;
+const CLONE_PAS_MS = 90 * 24 * 60 * 60 * 1000;
+
+export const clonarTreinoSchema = z.object({
+  dataAlvo: z
+    .string()
+    .datetime()
+    .refine((iso) => {
+      const t = new Date(iso).getTime();
+      const agora = Date.now();
+      return t <= agora + CLONE_FUT_MS && t >= agora - CLONE_PAS_MS;
+    }, 'dataAlvo fora da janela permitida (-90 dias até +180 dias do agora)'),
+});
+
 export const listTreinosQuery = z.object({
   status: StatusTreino.optional(),
   desde: z.string().datetime().optional(),

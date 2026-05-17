@@ -1,9 +1,10 @@
-import { listTreinosQuery, prescreverSchema } from '../schemas/treino.schemas.js';
+import { listTreinosQuery, prescreverSchema, clonarTreinoSchema } from '../schemas/treino.schemas.js';
 import { salvarExecucaoSchema } from '../schemas/execucao.schemas.js';
 import {
   listTreinosByAluno,
   getTreinoById,
   prescreverTreino,
+  clonarTreino,
   deleteTreino,
   historicoCargas,
 } from '../services/treino.service.js';
@@ -51,6 +52,20 @@ export async function salvarExecucao(req, res, next) {
       input: data,
     });
     res.json(result);
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function clonar(req, res, next) {
+  try {
+    const { dataAlvo } = clonarTreinoSchema.parse(req.body);
+    const treino = await clonarTreino({
+      user: req.user,
+      treinoId: req.params.id,
+      dataAlvo,
+    });
+    res.status(201).json({ treino });
   } catch (err) {
     next(err);
   }
