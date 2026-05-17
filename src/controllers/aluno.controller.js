@@ -4,7 +4,13 @@ import {
   recusarVinculoNutri,
   listarVinculosProfessor,
 } from '../services/aluno.service.js';
-import { getDesempenho } from '../services/desempenho.service.js';
+import { z } from 'zod';
+
+import { getDesempenho, getVolumeSeries } from '../services/desempenho.service.js';
+
+const volumeQuery = z.object({
+  weeks: z.coerce.number().int().min(4).max(52).default(12),
+});
 import { HttpError } from '../middleware/errorHandler.js';
 
 function ensureAluno(req) {
@@ -58,6 +64,23 @@ export async function desempenho(req, res, next) {
     const data = await getDesempenho({
       user: req.user,
       alunoId: req.params.alunoId,
+    });
+    res.json(data);
+  } catch (err) {
+    next(err);
+  }
+}
+
+// PR #20 — Matriz de Volume Semanal. Devolve série temporal por
+// modalidade pro gráfico. Acesso via guardião canônico igual ao
+// desempenho (read).
+export async function volume(req, res, next) {
+  try {
+    const { weeks } = volumeQuery.parse(req.query);
+    const data = await getVolumeSeries({
+      user: req.user,
+      alunoId: req.params.alunoId,
+      weeks,
     });
     res.json(data);
   } catch (err) {

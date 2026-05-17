@@ -298,3 +298,144 @@ export async function getDesempenho({ user, alunoId }) {
   ]);
   return { streak, resumoMes, ciclo, estimativasProva };
 }
+
+// ──────────────────────────────────────────────────────────────
+// PR #20 — Matriz de Volume Semanal
+//
+// Série temporal de volume por modalidade para o gráfico do atleta.
+// Single round-trip com timeline unificada (Treino concluído + Strava)
+// agrupada por week via date_trunc — o mesmo padrão arquitetural do
+// PR #17 (Coach Analytics).
+//
+// Unidades por modalidade (escolha deliberada — cada modalidade
+// "mede progresso" diferente):
+//
+//   - corridaKm    → distância (Km)        ← Treino.realizado.distanciaKm
+//                                            + Strava Run distanciaM/1000
+//   - ciclismoKm   → distância (Km)        ← idem
+//   - natacaoM     → distância (metros)    ← Treino.realizado.distanciaTotalM
+//                                            + Strava Swim distanciaM
+//   - musculacaoKg → TONELAGEM (Σ kg × reps de todos os sets concluídos)
+//
+// Por que metros em natação e km nas outras: piscina é dimensionada
+// em metros (200m, 1500m). Já corredor pensa em "10km, meia-maratona".
+// Ciclista pensa em km. UI traduz cada eixo Y conforme o modo.
+//
+// Tonelagem de musculação: aprofundamos no jsonb com 2 LATERAL JOINs
+// (exercicios → realizado → sets). Filtramos linhas onde `kg` ou
+// `reps` são nulos (warm-up sem carga registrada, etc) — soma só o
+// que tem valor numérico real.
+//
+// Janela: 4-52 semanas (cap pelo schema). Default 12 (3 meses) — o
+// horizonte onde dá pra ver bloco de treino completo sem inflar payload.
+// ──────────────────────────────────────────────────────────────
+
+export async function getVolumeSeries({ user, alunoId, weeks = 12 }) {
+  const aluno = await resolveAlunoAccess({ user, alunoId });
+  const id = aluno.id;
+
+  const semanas = Math.max(4, Math.min(weeks, 52));
+
+  // Cursor de início = começo da semana corrente − (semanas-1) * 7d, em UTC.
+  // Math: queremos N semanas TOTAIS (incluindo a atual), então recuamos N-1.
+  const inicio = inicioSemanaUTC();
+  inicio.setUTCDate(inicio.getUTCDate() - (semanas - 1) * 7);
+
+  // Timeline unificada com colunas SEMÂNTICAS por modalidade. Cada
+  // linha contribui pra UMA modalidade (zeros nas outras), e a agregação
+  // final faz SUM por semana. Postgres otimiza o UNION ALL usando os
+  // índices (alunoId, dataAlvo/finalizadoEm/iniciadoEm) que já existem.
+  //
+  // Strava swim usa distanciaM como metros (sem dividir por 1000);
+  // outras modalidades Strava dividem pra ter km coerente com Treino.realizado.
+  const rows = await prisma.$queryRaw`
+    WITH timeline AS (
+      -- Treino CORRIDA / CICLISMO: km vem do realizado.distanciaKm
+      SELECT t."finalizadoEm" AS quando,
+             t.modalidade::text AS modalidade,
+             COALESCE((t.detalhes->'realizado'->>'distanciaKm')::float, 0) AS km,
+             0::float AS metros,
+             0::float AS tonelagem
+        FROM "Treino" t
+       WHERE t."alunoId" = ${id}
+         AND t.status = 'CONCLUIDO'::"StatusTreino"
+         AND t."finalizadoEm" >= ${inicio}
+         AND t.modalidade IN ('CORRIDA'::"Modalidade", 'CICLISMO'::"Modalidade")
+      UNION ALL
+      -- Treino NATAÇÃO: metros vêm do realizado.distanciaTotalM
+      SELECT t."finalizadoEm",
+             'NATACAO',
+             0,
+             COALESCE((t.detalhes->'realizado'->>'distanciaTotalM')::float, 0),
+             0
+        FROM "Treino" t
+       WHERE t."alunoId" = ${id}
+         AND t.status = 'CONCLUIDO'::"StatusTreino"
+         AND t."finalizadoEm" >= ${inicio}
+         AND t.modalidade = 'NATACAO'::"Modalidade"
+      UNION ALL
+      -- Treino MUSCULAÇÃO: tonelagem agregada via jsonb (2 LATERAL JOINs).
+      -- Subselect SUM por treino — depois somamos por semana lá embaixo.
+      SELECT t."finalizadoEm",
+             'MUSCULACAO',
+             0, 0,
+             COALESCE((
+               SELECT SUM((s->>'kg')::float * (s->>'reps')::float)
+                 FROM jsonb_array_elements(t.detalhes->'exercicios') AS ex,
+                      jsonb_array_elements(ex->'realizado') AS s
+                WHERE (s->>'kg')   ~ '^[0-9]+(\\.[0-9]+)?$'
+                  AND (s->>'reps') ~ '^[0-9]+(\\.[0-9]+)?$'
+             ), 0)
+        FROM "Treino" t
+       WHERE t."alunoId" = ${id}
+         AND t.status = 'CONCLUIDO'::"StatusTreino"
+         AND t."finalizadoEm" >= ${inicio}
+         AND t.modalidade = 'MUSCULACAO'::"Modalidade"
+      UNION ALL
+      -- Strava: classifica pelo campo "tipo" (texto). Run/Ride em km;
+      -- Swim em metros. Resto cai em OUTRO e contribui zero.
+      SELECT a."iniciadoEm",
+             CASE
+               WHEN a.tipo ILIKE 'run%' THEN 'CORRIDA'
+               WHEN a.tipo ILIKE 'ride%' OR a.tipo ILIKE 'bike%' OR a.tipo ILIKE 'cycle%' THEN 'CICLISMO'
+               WHEN a.tipo ILIKE 'swim%' THEN 'NATACAO'
+               ELSE 'OUTRO'
+             END,
+             CASE WHEN a.tipo ILIKE 'swim%' THEN 0 ELSE (a."distanciaM" / 1000.0) END,
+             CASE WHEN a.tipo ILIKE 'swim%' THEN a."distanciaM"::float ELSE 0 END,
+             0
+        FROM "AtividadeStrava" a
+       WHERE a."alunoId" = ${id}
+         AND a."iniciadoEm" >= ${inicio}
+    )
+    SELECT
+      to_char(date_trunc('week', quando), 'YYYY-MM-DD') AS semana,
+      SUM(CASE WHEN modalidade = 'CORRIDA'    THEN km       ELSE 0 END) AS corrida_km,
+      SUM(CASE WHEN modalidade = 'CICLISMO'   THEN km       ELSE 0 END) AS ciclismo_km,
+      SUM(CASE WHEN modalidade = 'NATACAO'    THEN metros   ELSE 0 END) AS natacao_m,
+      SUM(CASE WHEN modalidade = 'MUSCULACAO' THEN tonelagem ELSE 0 END) AS musculacao_kg
+    FROM timeline
+    GROUP BY semana
+    ORDER BY semana ASC
+  `;
+
+  // Pós-processo: o SQL retorna SÓ semanas que tiveram atividade
+  // (`GROUP BY`). Pro gráfico sem "buracos", preenchemos as semanas
+  // vazias da janela com zeros — JS é mais simples que generate_series.
+  const indexada = new Map(rows.map((r) => [r.semana, r]));
+  const series = [];
+  const cursor = new Date(inicio);
+  for (let i = 0; i < semanas; i++) {
+    const key = cursor.toISOString().slice(0, 10);
+    const r = indexada.get(key);
+    series.push({
+      semana: key,
+      corridaKm:    r ? Number(r.corrida_km)    : 0,
+      ciclismoKm:   r ? Number(r.ciclismo_km)   : 0,
+      natacaoM:     r ? Number(r.natacao_m)     : 0,
+      musculacaoKg: r ? Number(r.musculacao_kg) : 0,
+    });
+    cursor.setUTCDate(cursor.getUTCDate() + 7);
+  }
+  return { weeks: semanas, series };
+}
