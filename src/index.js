@@ -32,7 +32,43 @@ const app = express();
 // nível de proxy (suficiente pras plataformas que usamos).
 if (env.isProd) app.set('trust proxy', 1);
 
-app.use(helmet());
+// PR #13 (audit 2.5 + 2.22) — Helmet endurecido pra API JSON.
+//
+// O servidor só responde JSON; não tem motivo pra um navegador
+// interpretar qualquer payload daqui como HTML/JS. CSP "default-src
+// 'none'" garante que mesmo se uma rota errada vazasse HTML, nada
+// externo carrega.
+//
+// Frontend tem CSP separada (meta tag no index.html, ver
+// apex-training-frontend/index.html) — só ali faz sentido liberar S3
+// para img, Strava pra perfil, etc.
+//
+// crossOriginResourcePolicy: 'same-site' impede que outro site embede
+// recursos nossos via <img>/<script>. Pra dev (CORS_ORIGIN='*') ainda
+// vale, porque o objetivo é proteger contra Spectre-like e leak de
+// recursos por outros sites, não substituir CORS.
+app.use(
+  helmet({
+    contentSecurityPolicy: {
+      directives: {
+        defaultSrc: ["'none'"],
+        frameAncestors: ["'none'"],
+        formAction: ["'none'"],
+        baseUri: ["'none'"],
+      },
+    },
+    crossOriginResourcePolicy: { policy: 'same-site' },
+    referrerPolicy: { policy: 'no-referrer' },
+    // HSTS só faz sentido quando o app está atrás de HTTPS sempre.
+    // Render/Vercel terminam TLS no edge; em dev (http://localhost) o
+    // header é ignorado pelo browser então não atrapalha.
+    strictTransportSecurity: {
+      maxAge: 60 * 60 * 24 * 365, // 1 ano
+      includeSubDomains: true,
+      preload: false,
+    },
+  }),
+);
 
 // Origens CORS já normalizadas/deduplicadas em env.corsOrigins.
 // Wildcard '*' só é permitido em dev (validação em env.js bloqueia em prod).

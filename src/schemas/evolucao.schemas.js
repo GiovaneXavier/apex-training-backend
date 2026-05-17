@@ -1,5 +1,17 @@
 import { z } from 'zod';
 
+import { isAllowedAssetUrl } from '../lib/uploadUrl.js';
+
+// PR #13 (audit 2.23) — URLs de fotos só podem apontar para o bucket S3
+// (ou CDN) configurado. Bloqueia atacante de gravar referência a domínio
+// arbitrário que serve tracker/payload.
+const assetUrl = z
+  .string()
+  .url()
+  .refine(isAllowedAssetUrl, {
+    message: 'URL fora do allowlist de mídia (use o uploader oficial).',
+  });
+
 export const AvaliadorTipo = z.enum(['ALUNO', 'NUTRICIONISTA', 'PROFESSOR']);
 
 export const Protocolo = z.enum([
@@ -75,10 +87,11 @@ const medidasUnion = z.discriminatedUnion('tipo', [
 ]);
 
 const fotosSchema = z.object({
-  frente: z.string().url().optional().or(z.literal('').transform(() => undefined)),
-  lado: z.string().url().optional().or(z.literal('').transform(() => undefined)),
-  costas: z.string().url().optional().or(z.literal('').transform(() => undefined)),
-  extras: z.array(z.string().url()).optional(),
+  frente: assetUrl.optional().or(z.literal('').transform(() => undefined)),
+  lado: assetUrl.optional().or(z.literal('').transform(() => undefined)),
+  costas: assetUrl.optional().or(z.literal('').transform(() => undefined)),
+  // Cap nos extras pra evitar storage abuse (cliente mandar 1000 URLs).
+  extras: z.array(assetUrl).max(10).optional(),
 });
 
 // ── Schemas de entidade ───────────────────────────────────────
