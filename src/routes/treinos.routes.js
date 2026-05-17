@@ -6,6 +6,7 @@ import {
   detalhe,
   prescrever,
   salvarExecucao,
+  clonar,
   remover,
   historico,
 } from '../controllers/treino.controller.js';
@@ -17,6 +18,7 @@ router.post('/prescrever', protect, prescrever);
 router.get('/historico-cargas', protect, historico);
 router.get('/detalhe/:id', protect, detalhe);
 router.post('/:id/salvar', protect, salvarExecucao);
+router.post('/:id/clonar', protect, clonar);
 router.delete('/:id', protect, remover);
 router.get('/:alunoId', protect, listByAluno);
 

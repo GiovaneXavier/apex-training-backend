@@ -20,7 +20,10 @@ const MIME_TO_EXT = {
   'image/heic': 'heic',
 };
 
-const MAX_BYTES = 8 * 1024 * 1024; // 8MB — alinhado com o limite do client
+// 8 MB cobre fotos de evolução com folga (smartphones modernos geram
+// JPEGs de 2-5 MB). Cap maior abre porta pra storage abuse — atacante
+// que escape o Zod cliente ainda esbarra na assinatura S3 (ver abaixo).
+const MAX_BYTES = 8 * 1024 * 1024;
 
 const presignQuerySchema = z.object({
   contentType: z.string().refine((v) => ALLOWED_MIME.has(v), {
@@ -84,12 +87,28 @@ export async function presignUpload(req, res, next) {
     // - UUID evita colisão e ofusca enumeração
     const key = `${kind}/${userId}/${randomUUID()}.${ext}`;
 
+    // PR #13 (audit 2.16) — defesa em profundidade nos uploads.
+    //
+    // O PUT presigned URL embute CADA campo abaixo na assinatura V4.
+    // Cliente que tentar enviar valor diferente recebe SignatureDoesNotMatch
+    // do S3 — equivalente prático aos `content-length-range` e
+    // `starts-with: content-type` das POST policies, mas sem trocar o
+    // verbo HTTP e quebrar o cliente.
+    //
+    //   - ContentType   → trava o MIME (não pode subir .iso disfarçado).
+    //   - ContentLength → trava o tamanho EXATO (não dá pra dizer 1KB e
+    //                     enviar 10GB; o S3 corta).
+    //   - SSE AES256    → S3 só aceita o PUT se a regra de criptografia
+    //                     for honrada. Combinada com a bucket policy
+    //                     `Deny s3:PutObject if not aws:KmsKeyId`, blinda
+    //                     dados em repouso.
+    //   - Metadata      → audit trail no objeto pro housekeeping futuro.
     const command = new PutObjectCommand({
       Bucket: bucket,
       Key: key,
       ContentType: contentType,
       ContentLength: contentLength,
-      // Travamos metadata útil pra auditoria/limpeza posterior
+      ServerSideEncryption: 'AES256',
       Metadata: {
         userId: String(userId),
         kind,

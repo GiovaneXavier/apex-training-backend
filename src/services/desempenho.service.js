@@ -1,22 +1,16 @@
 import { prisma } from '../lib/prisma.js';
 import { resolveAlunoAccess } from '../lib/access.js';
 import { HttpError } from '../middleware/errorHandler.js';
+import { inicioSemana } from '../lib/dates.js';
 
 const DIA_MS = 86400000;
 
 // ──────────────────────────────────────────────────────────────
 // Helpers
 // ──────────────────────────────────────────────────────────────
-
-/** Início da semana corrente (segunda 00:00 — padrão BR). */
-function inicioSemana(d = new Date()) {
-  const date = new Date(d);
-  date.setHours(0, 0, 0, 0);
-  const dow = date.getDay();              // 0=dom..6=sab
-  const diffParaSegunda = (dow + 6) % 7;  // 0→6, 1→0, 2→1...
-  date.setDate(date.getDate() - diffParaSegunda);
-  return date;
-}
+// `inicioSemana` agora vem de lib/dates.js (PR #14, audit 4.18).
+// `inicioSemanaUTC` abaixo permanece local — é detalhe do cálculo
+// de streak que precisa rodar em UTC para ser TZ-agnóstico.
 
 function inicioMes(d = new Date()) {
   return new Date(d.getFullYear(), d.getMonth(), 1, 0, 0, 0, 0);

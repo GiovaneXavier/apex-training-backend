@@ -37,8 +37,13 @@ export async function vincular(req, res, next) {
   try {
     ensureProf(req);
     const { email } = vincularSchema.parse(req.body);
-    const novo = await vincularPorEmail(req.user.userId, email);
-    res.status(201).json({ aluno: novo });
+    await vincularPorEmail(req.user.userId, email);
+    // PR #14 — resposta genérica e idempotente (anti-enumeration). O
+    // profissional confirma o vínculo refrescando a lista de alunos.
+    res.json({
+      ok: true,
+      message: 'Se o email pertencer a um aluno cadastrado, o vínculo foi criado. Atualize a lista para confirmar.',
+    });
   } catch (err) {
     next(err);
   }
