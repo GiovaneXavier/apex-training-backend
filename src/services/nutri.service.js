@@ -104,6 +104,12 @@ export async function detalheAluno(userId, alunoId) {
       pesoKg: aluno.pesoKg,
       alturaCm: aluno.alturaCm,
     },
+    // PR #18a — flag explícita pro front gating visual de escrita.
+    // Hoje sempre `true` (a rota só passa do guard se o aceite estiver
+    // cravado), mas o contrato carrega a flag pra que se o aluno revogar
+    // entre fetch e ação, o front possa ler do estado e desabilitar
+    // ações em vez de só depender do 403 do backend. Defesa em profundidade.
+    aceitoPeloAluno: v.aceitoPeloAluno,
     proximosTreinos,
     proximasProvas,
   };
