@@ -113,6 +113,7 @@ model Aluno {
   atividades    AtividadeStrava[]
   rotinas       RotinaMusculacao[]
   evolucoes     EvolucaoCorporal[]
+  planos        PlanoAlimentar[]
 }
 
 model Professor {
@@ -133,6 +134,7 @@ model Nutricionista {
   crn    String?
 
   vinculos VinculoNutricionista[]
+  planos   PlanoAlimentar[]
 }
 
 model VinculoProfessor {
@@ -391,4 +393,43 @@ model EvolucaoCorporal {
 
   @@index([alunoId, dataAvaliacao])
   @@index([avaliadorTipo])
+}
+
+// ──────────────────────────────────────────────────────────────
+// PlanoAlimentar — PR #18b (Sprint 6)
+//
+// Decisão de produto: NÃO modelamos refeições estruturadas. Nutris já
+// usam software dedicado (WebDiet/Dietbox) que exporta PDF. Esta tabela
+// só guarda referência ao PDF (via S3) + campo livre de "foco/metas".
+// Quando precisarmos de tracking estruturado (kcal, macros, refeições),
+// adicionamos um modelo separado sem migrar este.
+//
+// "ativo" é mantido pelo service via $transaction: criar novo plano
+// desativa todos os anteriores do mesmo aluno. Não usamos partial
+// unique index porque Postgres exige sintaxe que o Prisma migrate
+// engine ainda não emite sem fallback de raw SQL.
+// ──────────────────────────────────────────────────────────────
+model PlanoAlimentar {
+  id              String         @id @default(cuid())
+  alunoId         String
+  aluno           Aluno          @relation(fields: [alunoId], references: [id], onDelete: Cascade)
+  nutricionistaId String?
+  nutricionista   Nutricionista? @relation(fields: [nutricionistaId], references: [id], onDelete: SetNull)
+
+  // URL pública do PDF (S3 / CloudFront). Backend valida contra a
+  // allowlist `isAllowedAssetUrl` (PR #13, audit 2.23) no schema Zod.
+  pdfUrl          String
+  // Key S3 mantida pra DELETE/replace futuro sem precisar parsear a URL.
+  pdfKey          String?
+
+  // Texto livre de "Foco/Metas da Dieta" — input do nutri.
+  metasText       String?
+  // Default true; service desativa os antigos ao criar um novo.
+  ativo           Boolean        @default(true)
+
+  criadoEm        DateTime       @default(now())
+  atualizadoEm    DateTime       @updatedAt
+
+  // Query principal: "plano vigente do aluno" → filtra por (alunoId, ativo=true).
+  @@index([alunoId, ativo])
 }
