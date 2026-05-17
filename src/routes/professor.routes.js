@@ -8,6 +8,7 @@ import {
   alunoDetalhe,
   dashboard,
   calendario,
+  alertas,
 } from '../controllers/professor.controller.js';
 
 const router = Router();
@@ -15,6 +16,7 @@ const router = Router();
 router.use(protect);
 
 router.get('/dashboard', dashboard);
+router.get('/alertas', alertas);
 router.get('/calendario', calendario);
 router.get('/alunos', alunos);
 router.post('/vincular', vincular);
