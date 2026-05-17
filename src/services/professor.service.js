@@ -1,5 +1,6 @@
 import { prisma } from '../lib/prisma.js';
 import { HttpError } from '../middleware/errorHandler.js';
+import { inicioSemana, fimSemana } from '../lib/dates.js';
 
 async function getProfessor(userId) {
   const prof = await prisma.professor.findUnique({ where: { userId } });
@@ -39,32 +40,53 @@ export async function listAlunosVinculados(userId) {
   }));
 }
 
+// PR #14 (audit 2.21) — anti-enumeration.
+//
+// Esta rota é o vetor clássico de enumeration: profissional manda email,
+// resposta 404/409/200 vaza se o email existe e qual papel tem. Atacante
+// vira lista de emails do app em minutos.
+//
+// Fix: a função SEMPRE retorna `{ ok: true }` sem revelar nada. Internamente:
+//   - Email não existe → no-op.
+//   - Email existe mas não é ALUNO → no-op.
+//   - Email é aluno e ainda não vinculado → cria o vínculo.
+//   - Email é aluno e já vinculado → no-op (idempotente).
+//
+// A única exceção que ainda lançamos é "professor sem perfil" — não é
+// enumeration de aluno, é auth real do chamador.
+//
+// O profissional vê o resultado real refrescando a lista de alunos.
+// É um trade-off de UX: perde o feedback imediato "aluno vinculado!", mas
+// fecha o vetor. Convite por notificação push/email pode ser adicionado
+// depois, sem reabrir a brecha.
 export async function vincularPorEmail(userId, email) {
   const prof = await getProfessor(userId);
-  const user = await prisma.user.findUnique({ where: { email: email.toLowerCase().trim() } });
-  if (!user) throw new HttpError(404, 'Aluno não encontrado com esse email');
-  if (user.role !== 'ALUNO') throw new HttpError(400, 'Email pertence a outro tipo de perfil');
+  const emailNorm = email.toLowerCase().trim();
+
+  const user = await prisma.user.findUnique({ where: { email: emailNorm } });
+  if (!user || user.role !== 'ALUNO') {
+    return { ok: true };
+  }
 
   const aluno = await prisma.aluno.findUnique({ where: { userId: user.id } });
-  if (!aluno) throw new HttpError(404, 'Perfil de aluno não encontrado');
+  if (!aluno) {
+    return { ok: true };
+  }
 
+  // Idempotente: tentar criar e ignorar P2002 (race entre dois cliques)
+  // ou checar antes (mais simples). Optei por checar antes — não há race
+  // significativa neste fluxo (UI desabilita o botão durante o POST).
   const existing = await prisma.vinculoProfessor.findUnique({
     where: { alunoId_professorId: { alunoId: aluno.id, professorId: prof.id } },
   });
-  if (existing) throw new HttpError(409, 'Aluno já vinculado');
+  if (existing) {
+    return { ok: true };
+  }
 
-  const vinculo = await prisma.vinculoProfessor.create({
+  await prisma.vinculoProfessor.create({
     data: { alunoId: aluno.id, professorId: prof.id },
   });
-
-  return {
-    vinculoId: vinculo.id,
-    alunoId: aluno.id,
-    nome: user.nome,
-    email: user.email,
-    desde: vinculo.criadoEm,
-    treinosPendentes: 0,
-  };
+  return { ok: true };
 }
 
 export async function desvincular(userId, vinculoId) {
@@ -195,19 +217,19 @@ export async function dashboardProfessor(userId) {
   });
   const alunoIds = vinculos.map((v) => v.alunoId);
 
-  const inicioSemana = new Date();
-  inicioSemana.setHours(0, 0, 0, 0);
-  inicioSemana.setDate(inicioSemana.getDate() - inicioSemana.getDay());
-  const fimSemana = new Date(inicioSemana);
-  fimSemana.setDate(fimSemana.getDate() + 7);
+  // Semana padrão BR (segunda → próxima segunda). Antes do PR #14 esta
+  // função usava domingo como início — divergente do frontend e do
+  // desempenho.service, fazendo o "pendentesSemana" sair errado.
+  const ini = inicioSemana();
+  const fim = fimSemana();
 
   const [totalAlunos, pendentesSemana, concluidosSemana, treinosPrescritos] = await Promise.all([
     Promise.resolve(alunoIds.length),
     prisma.treino.count({
-      where: { alunoId: { in: alunoIds }, status: 'PENDENTE', dataAlvo: { gte: inicioSemana, lt: fimSemana } },
+      where: { alunoId: { in: alunoIds }, status: 'PENDENTE', dataAlvo: { gte: ini, lt: fim } },
     }),
     prisma.treino.count({
-      where: { alunoId: { in: alunoIds }, status: 'CONCLUIDO', finalizadoEm: { gte: inicioSemana, lt: fimSemana } },
+      where: { alunoId: { in: alunoIds }, status: 'CONCLUIDO', finalizadoEm: { gte: ini, lt: fim } },
     }),
     prisma.treino.count({ where: { professorId: prof.id } }),
   ]);

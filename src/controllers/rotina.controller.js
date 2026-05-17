@@ -3,6 +3,7 @@ import {
   rotinaUpdateSchema,
   rotinaListQuery,
   reagendarTreinoSchema,
+  iniciarTreinoSchema,
 } from '../schemas/rotina.schemas.js';
 import {
   listRotinas,
@@ -71,7 +72,7 @@ export async function doDia(req, res, next) {
 
 export async function iniciar(req, res, next) {
   try {
-    const dataAlvo = req.body?.dataAlvo;
+    const { dataAlvo } = iniciarTreinoSchema.parse(req.body ?? {});
     const treino = await iniciarTreinoDeRotina(req.user.userId, req.params.id, dataAlvo);
     res.status(201).json(treino);
   } catch (err) { next(err); }
