@@ -5,7 +5,7 @@ import { resolveAlunoAccess } from '../lib/access.js';
 
 export const listRPsQuery = z.object({
   exercicio: z.string().trim().optional(),
-  modalidade: z.enum(['MUSCULACAO', 'CORRIDA', 'CICLISMO', 'NATACAO', 'TRIATHLON', 'OUTRO']).optional(),
+  modalidade: z.enum(['MUSCULACAO', 'CORRIDA', 'CICLISMO', 'NATACAO', 'TRIATHLON', 'HYROX', 'JIU_JITSU', 'OUTRO']).optional(),
   limit: z.coerce.number().int().min(1).max(500).default(200),
 });
 

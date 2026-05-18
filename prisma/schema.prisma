@@ -28,7 +28,33 @@ enum Modalidade {
   NATACAO
   TRIATHLON
   HYROX
+  JIU_JITSU
   OUTRO
+}
+
+// PR #22 — domínio do exercício no catálogo.
+// Permite filtrar a biblioteca pelo contexto do mestre/professor sem
+// criar uma tabela separada (catálogo unificado mantém o picker do
+// RotinaForm reusável). MUSCULACAO continua sendo o default histórico.
+enum DominioExercicio {
+  MUSCULACAO
+  JIU_JITSU
+  MOBILIDADE
+  OUTRO
+}
+
+// PR #22 — tipo de movimento (mais granular que `dominio`).
+// Hoje usado SÓ para JIU_JITSU, mas o enum vive em column única no
+// catálogo pra permitir extensão futura (ex: TRACAO/EMPURRAO em
+// musculação) sem migration destrutiva.
+enum TipoMovimento {
+  DRILL
+  PASSAGEM
+  GUARDA
+  RASPAGEM
+  SUBMISSAO
+  ENTRADA
+  SAIDA
 }
 
 enum StatusTreino {
@@ -293,9 +319,22 @@ model Exercicio {
   criadoEm        DateTime       @default(now())
   atualizadoEm    DateTime       @updatedAt
 
+  // PR #22 — domínio (musculação/BJJ/etc) + campos opcionais p/ BJJ.
+  // Default MUSCULACAO preserva o catálogo histórico sem backfill.
+  dominio         DominioExercicio @default(MUSCULACAO)
+  // Posição inicial / contexto do movimento. Texto livre porque BJJ
+  // tem nomenclatura regional (ex: "guarda fechada" vs "guarda
+  // borboleta" vs "100 quilos"). Cap em 80 no Zod.
+  posicao         String?
+  // Categoria do movimento — usado pelo picker da UI pra agrupar
+  // "Passagens", "Submissões", etc na visão do mestre.
+  tipoMovimento   TipoMovimento?
+
   rotinaExercicios RotinaExercicio[]
 
   @@index([grupoMuscular])
+  @@index([dominio])
+  @@index([dominio, tipoMovimento])
 }
 
 // ──────────────────────────────────────────────────────────────
