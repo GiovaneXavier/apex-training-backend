@@ -97,6 +97,22 @@ enum GrupoMuscular {
   OUTRO
 }
 
+// PR #24 — Faixas adultas IBJJF.
+// Sequência canônica: BRANCA → AZUL → ROXA → MARROM → PRETA.
+// CORAL (vermelha+preta) e VERMELHA representam grandes mestres —
+// endgame, sem meta de progresso na UI. Kids (cinza, amarela,
+// laranja, verde) ficam pro futuro sem migration destrutiva
+// (adicionar valores em enum Postgres é additive).
+enum Faixa {
+  BRANCA
+  AZUL
+  ROXA
+  MARROM
+  PRETA
+  CORAL
+  VERMELHA
+}
+
 model User {
   id           String   @id @default(cuid())
   email        String   @unique
@@ -140,6 +156,7 @@ model Aluno {
   rotinas       RotinaMusculacao[]
   evolucoes     EvolucaoCorporal[]
   planos        PlanoAlimentar[]
+  promocoes     EvolucaoMarcial[]
 }
 
 model Professor {
@@ -475,4 +492,39 @@ model PlanoAlimentar {
 
   // Query principal: "plano vigente do aluno" → filtra por (alunoId, ativo=true).
   @@index([alunoId, ativo])
+}
+
+// ──────────────────────────────────────────────────────────────
+// PR #24 — Jornada do Faixa Preta (BJJ).
+//
+// Cada promoção é uma linha imutável (não atualizamos; corrigir =
+// criar nova linha + deletar anterior). Sequência cronológica permite
+// reconstruir a linha do tempo do atleta sem state mutável.
+//
+// `instrutorNome` é texto livre (não FK a Professor): cobre o caso
+// comum do atleta receber faixa de mestre externo à plataforma.
+//
+// Query principal "faixa atual" = LIMIT 1 ordenado por dataPromocao
+// DESC. Índice composto cobre a query sem table scan mesmo com
+// histórico longo.
+// ──────────────────────────────────────────────────────────────
+model EvolucaoMarcial {
+  id              String   @id @default(cuid())
+  alunoId         String
+  aluno           Aluno    @relation(fields: [alunoId], references: [id], onDelete: Cascade)
+
+  faixa           Faixa
+  // Grau (degrau/stripe na ponta da faixa): 0..4 antes da próxima
+  // graduação. Modelado como int simples — 5 é o salto de faixa.
+  grauNum         Int      @default(0)
+
+  dataPromocao    DateTime
+  instrutorNome   String?  // texto livre, max 120 no Zod
+  observacao      String?  // anotação opcional do mestre/atleta
+
+  criadoEm        DateTime @default(now())
+
+  // Query "faixa atual" filtra por alunoId e ordena por dataPromocao
+  // DESC com LIMIT 1. Índice composto cobre sem table scan.
+  @@index([alunoId, dataPromocao])
 }
