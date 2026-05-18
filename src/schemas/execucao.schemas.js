@@ -126,6 +126,39 @@ const realizadoTriathlonSchema = z
   })
   .strict();
 
+// ─── Jiu-Jitsu (PR #23) ──────────────────────────────────────────────
+//
+// Diário de tatame. 5 campos numéricos compactos pra preenchimento
+// fricção-zero no pós-rola — atleta suado/cansado, UI vai usar +/- e
+// slider.
+//
+// Caps de domínio:
+//   - matTimeSegundos: 14_400s = 4h. Aulas de BJJ raramente passam de
+//     2h; 4h cobre seminário/imersão sem virar vetor de abuso.
+//   - roundsCompletos / finalizacoes*: 0..50. Champion rola muito,
+//     mas 50 rolas num único treino é cap absurdo (1 rola = ~5min,
+//     50 = 4h+ rolando, já bate no matTime cap).
+//   - readinessRating: 1..10 integer. Slider único combina sono +
+//     fadiga + humor — fricção mínima vs 3 sliders separados.
+//
+// `.strict()` ativo: campo desconhecido rejeitado antes de gravar no
+// jsonb. UI/clientes terceiros não conseguem injetar "freeText" gigante
+// disfarçado de observação.
+const MAX_ROUNDS_JIU_JITSU = 50;
+const MAX_FINALIZACOES = 50;
+const MAX_MAT_TIME_SEG = 14_400; // 4h
+
+const realizadoJiuJitsuSchema = z
+  .object({
+    matTimeSegundos: z.number().int().nonnegative().max(MAX_MAT_TIME_SEG).optional(),
+    roundsCompletos: z.number().int().nonnegative().max(MAX_ROUNDS_JIU_JITSU).optional(),
+    finalizacoesFeitas: z.number().int().nonnegative().max(MAX_FINALIZACOES).optional(),
+    finalizacoesSofridas: z.number().int().nonnegative().max(MAX_FINALIZACOES).optional(),
+    readinessRating: z.number().int().min(1).max(10).optional(),
+    observacao: z.string().max(500).optional(),
+  })
+  .strict();
+
 // `outro` aceita string OU objeto solto (uso livre). Mantém cap rígido.
 const realizadoOutroSchema = z.union([
   z.string().max(2000),
@@ -149,6 +182,7 @@ const SCHEMA_POR_TIPO = {
   natacao: realizadoNatacaoSchema,
   hyrox: realizadoHyroxSchema,
   triathlon: realizadoTriathlonSchema,
+  jiu_jitsu: realizadoJiuJitsuSchema,
   outro: realizadoOutroSchema,
 };
 
@@ -164,4 +198,7 @@ export const LIMITES_EXECUCAO = Object.freeze({
   MAX_KG,
   MAX_REPS,
   MAX_DURACAO_SEG,
+  MAX_ROUNDS_JIU_JITSU,
+  MAX_FINALIZACOES,
+  MAX_MAT_TIME_SEG,
 });

@@ -236,6 +236,44 @@ export const detalhesOutro = z.object({
   realizado: z.string().max(2000).nullable().optional(),
 });
 
+// ─────────────────────────────────────────────────────────────
+// JIU-JITSU (PR #23)
+//
+// Prescrição do BJJ: aquecimento livre, drills (referência a movimentos
+// do catálogo Exercicio via nome — Movimento ficou no Exercicio do PR #22),
+// rolas (rounds × tempo). O `realizado` fica do lado do execucao.schemas
+// (jiuJitsuRealizadoSchema) — espelha o pattern Corrida.
+// ─────────────────────────────────────────────────────────────
+const jiuJitsuAquecimentoSchema = z.object({
+  nome: z.string().min(1).max(120),
+  duracaoSeg: z.number().int().positive().max(3600).optional(),
+  observacao: z.string().max(300).optional(),
+});
+
+const jiuJitsuDrillSchema = z.object({
+  // `movimento` referencia Exercicio.nome (texto livre — snapshot do
+  // catálogo no momento da prescrição). Mesmo pattern do musculacao.
+  movimento: z.string().min(1).max(120),
+  reps: z.number().int().positive().max(200).optional(),
+  duracaoSeg: z.number().int().positive().max(3600).optional(),
+  observacao: z.string().max(300).optional(),
+});
+
+const jiuJitsuRolasSchema = z.object({
+  rounds: z.number().int().positive().max(50),
+  tempoRoundSeg: z.number().int().positive().max(1800), // 30min/round max
+  descansoSeg: z.number().int().nonnegative().max(600).optional(),
+  observacao: z.string().max(300).optional(),
+});
+
+export const detalhesJiuJitsu = z.object({
+  tipo: z.literal('jiu_jitsu'),
+  aquecimento: z.array(jiuJitsuAquecimentoSchema).max(10).optional(),
+  drills: z.array(jiuJitsuDrillSchema).max(20).optional(),
+  rolas: jiuJitsuRolasSchema.optional(),
+  observacao: z.string().max(500).optional(),
+});
+
 // Discriminated union — superpoder do JSON.
 export const treinoDetalhes = z.discriminatedUnion('tipo', [
   detalhesMusculacao,
@@ -244,6 +282,7 @@ export const treinoDetalhes = z.discriminatedUnion('tipo', [
   detalhesNatacao,
   detalhesTriathlon,
   detalhesHyrox,
+  detalhesJiuJitsu,
   detalhesOutro,
 ]);
 
