@@ -24,6 +24,7 @@ import rotinaRoutes from './routes/rotina.routes.js';
 import evolucaoRoutes from './routes/evolucao.routes.js';
 import uploadRoutes from './routes/upload.routes.js';
 import planoRoutes from './routes/plano.routes.js';
+import marcialRoutes from './routes/marcial.routes.js';
 import { errorHandler } from './middleware/errorHandler.js';
 
 const app = express();
@@ -100,6 +101,7 @@ app.use('/api/rotinas', rotinaRoutes);
 app.use('/api/evolucoes', evolucaoRoutes);
 app.use('/api/upload', uploadRoutes);
 app.use('/api/planos-alimentares', planoRoutes);
+app.use('/api/marcial', marcialRoutes);
 
 app.use((req, res) => res.status(404).json({ error: 'NotFound', path: req.path }));
 app.use(errorHandler);
