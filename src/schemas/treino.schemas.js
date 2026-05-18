@@ -1,11 +1,16 @@
 import { z } from 'zod';
 
+// PR #22 — Zod alinhado com o enum Prisma. HYROX existia no schema do
+// banco e nos detalhesHyrox mas faltava aqui (drift desde o PR #14).
+// Agora pareado: enum SQL e enum Zod 1:1.
 export const Modalidade = z.enum([
   'MUSCULACAO',
   'CORRIDA',
   'CICLISMO',
   'NATACAO',
   'TRIATHLON',
+  'HYROX',
+  'JIU_JITSU',
   'OUTRO',
 ]);
 
