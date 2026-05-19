@@ -81,6 +81,18 @@ describe('GET /api/push/vapid-public-key — público', () => {
     assert.equal(res.status, 200);
     assert.equal(res.body.key, process.env.VAPID_PUBLIC_KEY);
   });
+
+  // PR #36 — hash SHA-256 base64url additivo, sem breaking change.
+  it('200 inclui hash SHA-256 base64url que bate com a key', async () => {
+    const res = await request(app).get('/api/push/vapid-public-key');
+    assert.equal(res.status, 200);
+    assert.ok(typeof res.body.hash === 'string' && res.body.hash.length > 0, 'hash presente');
+    const expected = crypto
+      .createHash('sha256')
+      .update(process.env.VAPID_PUBLIC_KEY)
+      .digest('base64url');
+    assert.equal(res.body.hash, expected);
+  });
 });
 
 describe('POST /api/push/subscriptions — autenticação + validação', () => {

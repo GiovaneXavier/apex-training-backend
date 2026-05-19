@@ -5,6 +5,7 @@ import {
   dispatch,
   deleteSubscription,
   getVapidPublicKey,
+  getVapidPublicKeyHash,
   saveSubscription,
 } from '../services/push.service.js';
 
@@ -16,7 +17,10 @@ import {
 
 export async function vapidPublicKey(req, res, next) {
   try {
-    res.json({ key: getVapidPublicKey() });
+    res.json({
+      key: getVapidPublicKey(),
+      hash: getVapidPublicKeyHash(),
+    });
   } catch (err) {
     next(err);
   }
