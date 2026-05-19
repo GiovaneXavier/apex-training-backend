@@ -369,17 +369,43 @@ model Treino {
   @@index([detalhes(ops: JsonbPathOps)], type: Gin, map: "Treino_detalhes_gin_idx")
 }
 
+// PR #37 (Sprint 14) — Macro-ciclo do atleta.
+//
+// Vocabulário consagrado em coaching de endurance: Race A/B/C.
+//   A: alvo principal do ciclo (UMA ativa por aluno — partial unique index).
+//   B: prova de preparação importante.
+//   C: simulação/tune-up.
+//
+// `arquivada` é determinístico (boolean), não derivado de `data < now()`,
+// porque Postgres não aceita função volátil em partial unique index.
+// Atleta/coach arquiva manualmente (próximo PR pode adicionar auto-archive
+// noturno via cron).
+enum ProvaPrioridade {
+  A
+  B
+  C
+}
+
 model Prova {
-  id         String   @id @default(cuid())
-  alunoId    String
-  aluno      Aluno    @relation(fields: [alunoId], references: [id], onDelete: Cascade)
-  modalidade Modalidade
-  nome       String
-  data       DateTime
-  detalhes   Json     @db.JsonB
-  criadoEm   DateTime @default(now())
+  id           String          @id @default(cuid())
+  alunoId      String
+  aluno        Aluno           @relation(fields: [alunoId], references: [id], onDelete: Cascade)
+  modalidade   Modalidade
+  nome         String
+  data         DateTime
+  prioridade   ProvaPrioridade @default(C)
+  arquivada    Boolean         @default(false)
+  alvoTempo    String?         // "1:45:00" — override do detalhes.metaTempo pra UX cleaner
+  local        String?         // "Florianópolis, SC"
+  detalhes     Json            @db.JsonB
+  criadoEm     DateTime        @default(now())
+  atualizadoEm DateTime        @updatedAt
 
   @@index([alunoId, data])
+  // Dashboard query: "qual a Race A ativa do aluno?" precisa ser O(log n).
+  @@index([alunoId, prioridade, arquivada], map: "Prova_alunoId_prioridade_arquivada_idx")
+  // O partial unique index "prova_alvo_principal_ativo" é criado via raw
+  // SQL na migration — Prisma 5 não modela WHERE em @@unique nativamente.
 }
 
 // Modelo de RP "ativo": uma linha por combinação (alunoId, exercicio,
