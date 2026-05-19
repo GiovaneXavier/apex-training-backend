@@ -28,9 +28,17 @@ mock.module('../lib/prisma.js', {
         findUnique: async () => state.treino,
         update: async ({ data }) => ({ ...state.treino, ...data }),
       },
+      // PR #31 — stubs pra engine de conquistas (queueMicrotask em
+      // salvarExecucao dispara avaliarConquistas RP_FIRST/PACE).
+      conquistaDesbloqueada: {
+        findMany: async () => [],
+        createMany: async () => ({ count: 0 }),
+      },
+      $queryRaw: async () => [],
       recordePessoal: {
         findUnique: async () => null,
         findFirst: async (args) => state.rps.get(chavePace(args)) ?? null,
+        count: async () => 0, // engine RP_FIRST chama count
         create: async ({ data }) => {
           if (state.beforeCreate) {
             await state.beforeCreate(data);

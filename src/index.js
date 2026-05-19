@@ -5,6 +5,12 @@ import 'dotenv/config';
 // com mensagem clara em vez de quebrar no primeiro request.
 import { env } from './lib/env.js';
 
+// PR #34 — Sentry SOBE ANTES de qualquer outro require. SDK precisa
+// enganchar http/express auto-instrument. No-op quando SENTRY_DSN ausente
+// ou NODE_ENV=test → zero overhead em dev/test.
+import { initSentry } from './lib/sentry.js';
+initSentry();
+
 import express from 'express';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
@@ -25,6 +31,9 @@ import evolucaoRoutes from './routes/evolucao.routes.js';
 import uploadRoutes from './routes/upload.routes.js';
 import planoRoutes from './routes/plano.routes.js';
 import marcialRoutes from './routes/marcial.routes.js';
+import voiceRoutes from './routes/voice.routes.js';
+import pushRoutes from './routes/push.routes.js';
+import coachBriefingRoutes from './routes/coachBriefing.routes.js';
 import { errorHandler } from './middleware/errorHandler.js';
 
 const app = express();
@@ -102,6 +111,9 @@ app.use('/api/evolucoes', evolucaoRoutes);
 app.use('/api/upload', uploadRoutes);
 app.use('/api/planos-alimentares', planoRoutes);
 app.use('/api/marcial', marcialRoutes);
+app.use('/api/voice', voiceRoutes);
+app.use('/api/push', pushRoutes);
+app.use('/api/coach', coachBriefingRoutes);
 
 app.use((req, res) => res.status(404).json({ error: 'NotFound', path: req.path }));
 app.use(errorHandler);

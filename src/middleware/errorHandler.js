@@ -1,5 +1,7 @@
 import { ZodError } from 'zod';
 
+import { captureUnexpectedError } from '../lib/sentry.js';
+
 export function errorHandler(err, req, res, next) {
   if (res.headersSent) return next(err);
 
@@ -10,6 +12,13 @@ export function errorHandler(err, req, res, next) {
   // HttpError (qualquer status, incluindo 5xx como 502 upstream) entrega
   // a mensagem real ao cliente — mensagens escritas por nós, sem stack leak.
   if (err instanceof HttpError) {
+    // PR #34 — reportar 5xx mesmo se for HttpError (504, 502 upstream).
+    // 4xx HttpError fica fora — rejeição esperada do app.
+    if (err.status >= 500) {
+      captureUnexpectedError(err, {
+        path: req?.path, method: req?.method, status: err.status,
+      });
+    }
     return res.status(err.status).json({ error: err.name || 'Error', message: err.message });
   }
   // Compat: outros erros com .status (improvável após PR #5) tratados
@@ -18,7 +27,12 @@ export function errorHandler(err, req, res, next) {
     return res.status(err.status).json({ error: err.name || 'Error', message: err.message });
   }
 
+  // PR #34 — 5xx genéricos (não-HttpError) sempre capturados. Inclui
+  // bugs reais: TypeError, ReferenceError, throws não-tratados.
   console.error('[unhandled]', err);
+  captureUnexpectedError(err, {
+    path: req?.path, method: req?.method, status: 500,
+  });
   res.status(500).json({ error: 'InternalServerError' });
 }
 

@@ -1,6 +1,7 @@
 import { prisma } from '../lib/prisma.js';
 import { resolveAlunoAccess } from '../lib/access.js';
 import { HttpError } from '../middleware/errorHandler.js';
+import { avaliarConquistas } from '../lib/conquistasEngine.js';
 
 // ──────────────────────────────────────────────────────────────
 // PR #24 — Jornada do Faixa Preta (BJJ).
@@ -62,7 +63,7 @@ export async function registrarPromocao({ user, input }) {
     user, alunoId: targetAlunoId, write: true,
   });
 
-  return prisma.evolucaoMarcial.create({
+  const novo = await prisma.evolucaoMarcial.create({
     data: {
       alunoId: aluno.id,
       faixa: input.faixa,
@@ -72,6 +73,18 @@ export async function registrarPromocao({ user, input }) {
       observacao: input.observacao ?? null,
     },
   });
+
+  // PR #31 — Conquista de promoção (Sprint 11). Fire-and-forget; falha
+  // não derruba a criação da promoção.
+  queueMicrotask(() => {
+    void avaliarConquistas({
+      alunoId: aluno.id,
+      trigger: 'FAIXA_PROMOCAO',
+      contexto: { faixa: novo.faixa, promocaoId: novo.id },
+    });
+  });
+
+  return novo;
 }
 
 export async function deletePromocao({ user, id }) {

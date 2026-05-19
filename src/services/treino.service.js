@@ -1,6 +1,7 @@
 import { prisma } from '../lib/prisma.js';
 import { resolveAlunoAccess } from '../lib/access.js';
 import { HttpError } from '../middleware/errorHandler.js';
+import { firePush, payloadNovoTreinoPrescrito } from '../lib/pushTriggers.js';
 
 // Cópia local de resolveAlunoAccess removida no PR #4.1.
 // Tudo agora vai pelo guardião canônico em ../lib/access.js.
@@ -78,7 +79,7 @@ export async function clonarTreino({ user, treinoId, dataAlvo }) {
 
   const detalhesLimpos = limparExecucao(origem.detalhes);
 
-  return prisma.treino.create({
+  const novo = await prisma.treino.create({
     data: {
       alunoId: origem.alunoId,
       professorId: prof.id,
@@ -90,6 +91,21 @@ export async function clonarTreino({ user, treinoId, dataAlvo }) {
       status: 'PENDENTE',
     },
   });
+
+  // PR #27 — Gatilho da Prescrição. PROFESSOR clona, ALUNO recebe.
+  // Lookup mínimo: só `userId` do aluno alvo. select reduzido pra não
+  // hidratar registro inteiro só pra ler 1 campo.
+  const alvo = await prisma.aluno.findUnique({
+    where: { id: origem.alunoId },
+    select: { userId: true },
+  });
+  firePush({
+    userId: alvo?.userId,
+    payload: payloadNovoTreinoPrescrito(),
+    trigger: 'novo-treino-prescrito',
+  });
+
+  return novo;
 }
 
 function limparExecucao(detalhes) {

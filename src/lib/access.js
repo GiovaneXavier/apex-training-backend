@@ -45,6 +45,28 @@ export async function resolveAlunoAccess({
     throw new HttpError(401, 'Não autenticado');
   }
 
+  // ── ADMIN (PR #32.5) — God-mode de LEITURA ────────────────────────
+  // Bypassa todas as checagens de vínculo. NUNCA emitido por fluxo de
+  // cadastro normal (ver Role enum + seed:admin).
+  //
+  // ESCOPO RESTRITO: leitura. Para escrita, ADMIN ainda precisa do role
+  // certo (`PROFESSOR` pra prescrever, `NUTRICIONISTA` pra plano), pois
+  // services de mutação dependem de PerfilProfissional vinculado
+  // (Professor.id pra Treino.professorId, etc). ADMIN não tem perfil
+  // profissional próprio, então não conseguiria executar mutação mesmo
+  // se bypassado — o erro vinha do prisma upstream. Manter o role check
+  // hard-coded nos services dá uma rejeição mais limpa.
+  //
+  // Sem alunoId → 400 (ADMIN ainda precisa apontar pra UM aluno).
+  if (user.role === 'ADMIN') {
+    if (!alunoId) {
+      throw new HttpError(400, 'ADMIN requer alunoId explícito');
+    }
+    const aluno = await prisma.aluno.findUnique({ where: { id: alunoId } });
+    if (!aluno) throw new HttpError(404, 'Aluno não encontrado');
+    return aluno;
+  }
+
   // ── ALUNO ────────────────────────────────────────────────────────
   if (user.role === 'ALUNO') {
     const aluno = await prisma.aluno.findUnique({ where: { userId: user.userId } });

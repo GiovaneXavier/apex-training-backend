@@ -19,6 +19,11 @@ enum Role {
   ALUNO
   PROFESSOR
   NUTRICIONISTA
+  // PR #32.5 — God-mode pra QA/debug/e2e. Bypass total na ACL via
+  // access.js. NUNCA emitir em fluxo de cadastro normal — só via
+  // `npm run seed:admin` ou injeção manual no DB. Tratado como classe
+  // de superusuário operacional, NÃO papel de produto.
+  ADMIN
 }
 
 enum Modalidade {
@@ -130,9 +135,41 @@ model User {
   aluno         Aluno?
   professor     Professor?
   nutricionista Nutricionista?
+  pushSubscriptions PushSubscription[]
 
   @@index([role])
   @@index([ativo])
+}
+
+// PR #26 — Web Push subscription por device.
+//
+// 1 user → N subscriptions (multi-device: PC casa, celular, tablet).
+// Cada subscription representa um endpoint único do Push Service do
+// browser (FCM/APNs/Mozilla). Tratamos como recurso descartável:
+// quando o Push Service devolve 410 Gone ou 404, deleta inline.
+//
+// onDelete: Cascade cobre o cenário "user deletou conta" — subscriptions
+// somem sem orphans.
+//
+// `endpoint` é UNIQUE pra idempotência: re-subscribe do mesmo device
+// (pushsubscriptionchange ou reinstall PWA) faz upsert por endpoint sem
+// duplicar.
+model PushSubscription {
+  id         String   @id @default(cuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  endpoint   String   @unique
+  // Chaves de criptografia da W3C Push API. p256dh = chave pública ECDH
+  // do client; auth = secret de cifra do payload. Ambas base64url.
+  p256dh     String
+  auth       String
+  // Debug-only — ajuda a identificar "que device é esse?" quando o user
+  // pede ajuda. Não é fonte de verdade, apenas hint.
+  userAgent  String?
+  createdAt  DateTime @default(now())
+  lastUsedAt DateTime @default(now())
+
+  @@index([userId])
 }
 
 model Aluno {
@@ -157,6 +194,59 @@ model Aluno {
   evolucoes     EvolucaoCorporal[]
   planos        PlanoAlimentar[]
   promocoes     EvolucaoMarcial[]
+  conquistas    ConquistaDesbloqueada[]
+  insightSemanal AlunoInsightSemanal?
+}
+
+// PR #31 — Conquistas desbloqueadas por aluno (Sprint 11).
+//
+// Catálogo de conquistas vive EM CÓDIGO (src/data/conquistasCatalogo.js)
+// — não em DB. Esta tabela só registra QUANDO cada aluno desbloqueou
+// cada código. Adicionar nova conquista = PR de código (review natural),
+// não migration.
+//
+// @@unique([alunoId, codigo]) garante idempotência:
+//   - Engine pode rodar 2x (retry, reprocess) sem duplicar.
+//   - Push de marco dispara 1x só por desbloqueio.
+//
+// `contexto` JSONB audit: id do treino/RP/promoção que disparou.
+// Útil pra debug ("por que o aluno X tem essa conquista?") e pra
+// futuros recursos (linkar badge → treino original).
+//
+// onDelete Cascade: aluno deletado → conquistas somem com ele.
+model ConquistaDesbloqueada {
+  id             String   @id @default(cuid())
+  alunoId        String
+  aluno          Aluno    @relation(fields: [alunoId], references: [id], onDelete: Cascade)
+  codigo         String
+  desbloqueadoEm DateTime @default(now())
+  contexto       Json?
+
+  @@unique([alunoId, codigo])
+  @@index([alunoId])
+}
+
+// PR #32 — Insight semanal do aluno (Sprint 12 / Aluno Intelligence).
+//
+// Cache server-side do "fechamento da semana" gerado por IA. 1 ativo por
+// aluno (@@unique em alunoId). TTL 7 dias — alinhado com ciclo semanal,
+// regenera sob demanda na primeira abertura da semana.
+//
+// `result` JSONB: { summary, destaques[], origem: 'llm'|'fallback-estatico' }
+// `meta` JSONB: telemetria (modelo, snapshot resumido, tokens estimados,
+//   tentativas LLM, se foi regenerado por veto).
+//
+// onDelete Cascade: aluno some, insight some junto.
+model AlunoInsightSemanal {
+  id          String   @id @default(cuid())
+  alunoId     String   @unique
+  aluno       Aluno    @relation(fields: [alunoId], references: [id], onDelete: Cascade)
+  result      Json
+  meta        Json?
+  generatedAt DateTime @default(now())
+  expiresAt   DateTime
+
+  @@index([expiresAt])
 }
 
 model Professor {
@@ -168,6 +258,29 @@ model Professor {
   vinculos          VinculoProfessor[]
   treinosPrescritos Treino[]
   rotinas           RotinaMusculacao[]
+  briefing          CoachBriefing?
+}
+
+// PR #28 — Coach Briefing Semanal.
+//
+// Cache server-side da síntese IA. 1 briefing ativo por professor
+// (@@unique em professorId). TTL 24h padrão; botão "Atualizar agora"
+// no front faz upsert force-regen (com rate-limit 3/h na rota).
+//
+// `result` JSONB carrega o payload validado do LLM (summary +
+// alunosEmAlerta[] + alunosBemEncaminhados[]).
+// `meta` carrega telemetria reproducível (alunos considerados, modelo,
+// tokens estimados) pra debug/observabilidade — não vai pro front.
+model CoachBriefing {
+  id          String   @id @default(cuid())
+  professorId String   @unique
+  professor   Professor @relation(fields: [professorId], references: [id], onDelete: Cascade)
+  result      Json
+  meta        Json?
+  generatedAt DateTime @default(now())
+  expiresAt   DateTime
+
+  @@index([expiresAt])
 }
 
 model Nutricionista {

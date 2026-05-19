@@ -1,8 +1,239 @@
 # Apex Training — Status do Projeto
 
-**Data:** 2026-05-05
-**Branches:** `dev` (working), `main` (sincronizado com `dev`)
+**Data:** 2026-05-19
+**Branches:** `dev` (working), `main`, `feat/sentry-observabilidade` (PR #34) em andamento — Sprint 13 em curso
 **Repos:** `apex-training-backend` · `apex-training-frontend`
+
+## Sprint 13 — Production Hardening 🛡️
+
+| PR | Tema | Status |
+|----|------|--------|
+| #32.5 | Admin Master (God-mode operacional pra QA/E2E) | ✅ Implementado |
+| #33 | Lazy intra-Progresso (Recharts isolado + SVG donut + GraficoVolume lazy) | ✅ Mergeado |
+| #34 | Sentry (frontend + backend) + rastreamento ERR_NETWORK | ✅ Implementado |
+| #35 | Playwright E2E (happy paths usando Admin Master) | ⏳ Próximo |
+| #36 | VAPID hash check + AbortController em fetches | ⏳ Fechamento |
+
+**PR #34 — entregue (Sentry observabilidade):**
+- Backend: `src/lib/sentry.js` — wrapper com `initSentry()` no-op quando DSN ausente OU `NODE_ENV=test`. Auto-instrumentação HTTP/Express. `tracesSampleRate` default 0.1 (proteção de quota). **beforeSend filtra HttpError 4xx** (rejeição esperada do app — não polui dashboard).
+- Backend env (`SENTRY_DSN`, `SENTRY_ENVIRONMENT`, `SENTRY_TRACES_SAMPLE_RATE`, `SENTRY_RELEASE`). Derivado `env.sentryEnabled = boolean(DSN) && NODE_ENV !== 'test'`.
+- Backend: `errorHandler` chama `captureUnexpectedError` em (1) HttpError ≥500 e (2) erros genéricos não-HttpError (TypeError, etc). ZodError e HttpError 4xx ficam fora.
+- Backend: init é EAGER em `src/index.js` (antes de qualquer require) — SDK precisa enganchar `http`/`express` auto-instrument.
+- Frontend: `src/lib/sentry.ts` — wrapper com `initSentryFrontend()` no-op sem `VITE_SENTRY_DSN`. **BrowserTracing integration** + **`tracePropagationTargets`** apontando pra `localhost` + origem do `VITE_API_URL` (sem propagação cross-origin pra Anthropic/S3/Strava).
+- Frontend: **`beforeSend` filtro de ruído** descarta erros vindos de `chrome-extension://`, `moz-extension://`, `safari-extension://` e `ResizeObserver loop limit exceeded` (warning benigno).
+- Frontend: **`captureNetworkError()`** enriquece com `navigator.onLine`, URL, método e código (`ERR_NETWORK`, `ECONNABORTED`). Tags Sentry permitem filtrar "túnel do metrô" vs "backend caiu".
+- Frontend: axios interceptor (`src/lib/api.ts`) chama `captureNetworkError` SOMENTE quando `!err.response` (falha de transporte). Erros HTTP 4xx/5xx têm response → tratados pelo Sentry backend.
+- Testes: Backend **442** (era 435, +7 — gating no-op em test, filtro 4xx, captura 5xx). Frontend **214** (era 201, +13 — 9 do filtro de ruído + 4 do interceptor axios).
+- Bundle: Index principal **86.02 KB Gzip** (era 85.97 → +50 bytes do Sentry/React import em modo no-op). Sem chunks novos significativos.
+
+**Operacional:**
+- Backend: setar `SENTRY_DSN` em prod (Render env). Opcional `SENTRY_TRACES_SAMPLE_RATE=0.05` se traffic alto pra cortar custo.
+- Frontend: setar `VITE_SENTRY_DSN` no build de prod (Vercel env). CI pode injetar `VITE_SENTRY_RELEASE=$COMMIT_SHA` pra correlacionar deploys.
+- Em dev sem DSN: app sobe normal, init no-op, zero overhead.
+
+---
+
+**PR #32.5 — entregue (Admin Master):**
+- `Role` enum: adicionado `ADMIN`. Migration `20260522110000_role_admin`.
+- `src/lib/access.js`: bypass total em `resolveAlunoAccess` quando role=ADMIN. ADMIN sem `alunoId` → 400 (precisa apontar). ADMIN com alunoId inexistente → 404 (não inventa).
+- `src/middleware/auth.middleware.js`: `requireRole` bypassa pra ADMIN — passa em qualquer `requireRole('PROFESSOR')` ou `requireRole('NUTRICIONISTA')` etc.
+- **Escopo limitado por design**: ADMIN é god-mode de LEITURA. Services de escrita mantém `user.role !== 'PROFESSOR'` hard-coded — ADMIN não tem perfil profissional vinculado, então nem se bypassasse conseguiria criar Treino/Plano (faltaria FK). Cobre 100% do propósito (navegar/QA/debug) sem furo de segurança.
+- `prisma/seed-admin.js` + `npm run seed:admin`: idempotente (re-rodar atualiza role+ativo mas preserva senha). Fail-fast em prod sem `ADMIN_PASSWORD` explícita.
+- Testes: **+10** (10/10 verde). Total backend **435**.
+
+**PR #33 — entregue (Lazy intra-Progresso):**
+- Estrutura nova: `src/pages/aluno/progresso/{shared,SecaoDesempenho,SecaoEvolucao}.tsx`. Casca `Progresso.tsx` reduzida de 588 linhas → 50 linhas com 2 `React.lazy()`.
+- **SVG donut puro** substitui PieChart de Recharts no CardCiclo (geometria trivial — 1 arco com `stroke-dasharray`/`stroke-dashoffset`). Animação 400ms via CSS transition. Custo: zero bytes de lib.
+- **`GraficoVolume` lazy import** dentro de SecaoDesempenho — chunk próprio com Suspense fallback ("Carregando matriz de volume…").
+- Resultado: Recharts vive APENAS em SecaoEvolucao (LineChart) e GraficoVolume (BarChart) — chunks lazy independentes. Atleta abre tab Desempenho default → vê tudo sem baixar Recharts. Click em Evolução → baixa LineChart chunk sob demanda.
+- Substituição completa de Recharts por lib leve **fica pra Sprint 14+ em migração gradual** (gráfico-a-gráfico, sem big-bang).
+
+### Métricas Bundle — PR #33 ⚡
+
+| Chunk | Antes | Depois | Δ |
+|-------|-------|--------|---|
+| **Progresso (first paint default)** | **129 KB Gzip** monolítico | **~17 KB Gzip** (casca 6.29 + Desempenho 2.48 + GraficoVolume lazy 7.78) | **−87%** |
+| SecaoEvolucao (sob demanda) | — | 13.80 KB Gzip | só quando clicado |
+| shared chunk (Recharts global) | 103 KB Gzip | 0.67 KB Gzip | Recharts decomposto |
+| Index principal | 85.95 KB Gzip | **85.97 KB Gzip** | +2 bytes (negligível) |
+
+Frontend testes: **201/201** (zero regressão).
+
+---
+
+## Sprint 12 — Aluno Intelligence Layer 🔍
+
+| PR | Tema | Status |
+|----|------|--------|
+| #32 | Weekly Check-in (IA narrativa retroativa com coleira curta) | ✅ Implementado |
+
+**PR #32 — entregue:**
+- Prisma: model `AlunoInsightSemanal` (1 ativo por aluno, JSONB result+meta, TTL 7d via `expiresAt`). Migration `20260522100000_aluno_insight_semanal`.
+- Backend: `src/lib/insightVeto.js` — **guardião lexical** com 3 categorias (PRESCRITIVO/MEDICO/PREDITIVO), 30+ termos curados. Filtro substring case-insensitive — V1 estrito, **falso positivo em negações documentado em código + teste explícito** ("não houve lesão" também veta; cai no fallback estático → UX continua ok). Evolução futura prevista: classificador semântico.
+- Backend: `src/services/alunoInsightData.service.js` — snapshot **determinístico** de 4 semanas. Reusa `computeStreak` (PR #31), recordes, conquistas, timeline (PR #17). Privacy: zero PII no payload (nem nome — narrativa é em 2ª pessoa).
+- Backend: `src/services/alunoInsight.service.js` — **triple-guard pipeline**:
+  1. `temDadosSuficientes=false` → atalho estático sem tocar LLM.
+  2. Cache hit válido → serve.
+  3. LLM com tool_use forçado + system prompt cached.
+  4. Zod estrito + filtro veto. Veto bate → regenera 1× com nota explícita do termo.
+  5. 2ª veto → **fallback estático em código** (`construirInsightEstatico`) usando números do snapshot — sem IA, sem risco.
+  6. LLM down + cache existe → stale. LLM down sem cache → fallback estático (NUNCA 5xx).
+- Backend: `GET /api/aluno/weekly-checkin` (cache-aware) + `POST /api/aluno/weekly-checkin/refresh` (rate-limit **2/semana/aluno**).
+- Frontend: `WeeklyCheckinCard.tsx` no Dashboard, abaixo do StreakCard. 5 estados (loading/fresh/stale/empty/error). **Disclaimer fixo renderizado pelo frontend** ("Insight gerado por IA. Sempre consulte seu treinador...") — garantia de presença mesmo se LLM esquecer. Botão refresh oculto em estado `empty`.
+- Testes: Backend **425** (era 395, +30). Frontend **201** (era 192, +9).
+- Bundle: Aluno Dashboard chunk +0.72 KB Gzip (WeeklyCheckinCard inline; sem lib nova). Index principal **85.95 KB Gzip** intacto.
+- Custo estimado: ~$0.0005/insight × 1/semana = ~$0.002/mês/aluno.
+
+**Princípios reusados:**
+- Cache TTL > cron (PR #28).
+- IA narra retroativamente, humano prescreve (autoridade do coach intacta).
+- Defesa em camadas: input_schema + Zod + filtro lexical + fallback estático.
+- Notificação só em evento REAL (sem push push deste PR — descoberta orgânica no Dashboard).
+
+**Coleira curta do prompt (regras negativas explícitas):**
+- ❌ Mudança de carga/intensidade/volume/frequência.
+- ❌ Contradizer prescrição em curso.
+- ❌ Previsões de pace/RP/performance.
+- ❌ Conselhos médicos/sono/hidratação/suplementação.
+- ❌ Lesão/dor/fadiga/recuperação.
+- ✅ Apenas narrativa retroativa factual com números do JSON.
+
+---
+
+## Sprint 11 — Gamificação & Retenção do Aluno 🔥
+
+| PR | Tema | Status |
+|----|------|--------|
+| #31 | Conquistas event-driven + Streak counter + Push de marco | ✅ Implementado |
+
+**PR #31 — entregue:**
+- Prisma: model `ConquistaDesbloqueada` (1 row por unlock por aluno, `@@unique([alunoId, codigo])` pra idempotência blindada). Migration `20260521100000_conquista_desbloqueada`.
+- Backend: **catálogo declarativo em código** (`src/data/conquistasCatalogo.js`) — 10 conquistas iniciais cobrindo streak (2/4/12/24/52 semanas), primeiro RP, pace 5K/10K, promoção BJJ. Adicionar nova = PR de código (review natural), NÃO migration.
+- Backend: `src/services/streak.service.js` — **streak derivado, NÃO persistido**. SQL único com CTE de timeline (Treino + AtividadeStrava), `date_trunc('week', t)` alinhado ISO 8601, semana válida = ≥3 atividades. Segunda/terça da semana corrente sem treino NÃO punem o atleta (streak conta a partir da anterior válida). Função pura `computeStreak()` extraída pra testes.
+- Backend: `src/lib/conquistasEngine.js` — motor com 4 avaliadores (STREAK / RP_FIRST / PACE_THRESHOLD / FAIXA_PROMOCAO). Idempotência em camadas (filtro `setJa` + DB `@@unique` + `createMany skipDuplicates`). **Fail-soft**: erro no engine NÃO propaga via try/catch; caller usa `queueMicrotask` (filosofia PR #27).
+- Backend: `pushTriggers.payloadConquistaDesbloqueada()` — 1 push por desbloqueio, tag única (`conquista-{codigo}`) impede dup no SO.
+- Backend: plug em `execucao.service` (STREAK + RP_FIRST + PACE_THRESHOLD após salvarExecucao) e `marcial.service` (FAIXA_PROMOCAO após registrarPromocao). Todos via `queueMicrotask` — caminho crítico inatingível.
+- Backend: 2 endpoints REST: `GET /api/aluno/streak` + `GET /api/aluno/conquistas` (ambos com variante `/:alunoId/*` pra PROFESSOR vinculado).
+- Frontend: `StreakCard.tsx` no topo do Dashboard do Aluno — 3 estados visuais (🔥 ≥4, 🌱 1-3, 💤 0 sem shame). Dot row últimas 12 semanas estilo GitHub. Card todo é link pra `/aluno/conquistas`. Badge "recorde N" quando histórico > atual.
+- Frontend: `/aluno/conquistas` (rota lazy) com **estante** (desbloqueadas em ordem cronológica reversa) + **próximas** (locked com `hintLocked` em vez de `descricao` — sem spoiler). Deep-link `?destaque=CODIGO` ring-highlight no badge correspondente.
+- Frontend: `ConquistaBadge.tsx` reutilizável (data-tier + data-desbloqueada + data-destaque attrs pra estilização e teste).
+- Testes: Backend **395** (era 371, +24). Frontend **192** (era 179, +13).
+- Bundle: Conquistas page chunk **1.43 KB Gzip** (lazy). Aluno Dashboard chunk +0.74 KB Gzip (StreakCard inline). Index principal **85.95 KB Gzip** (+0.07 KB do CSS dos novos componentes).
+
+**Princípios mantidos do legado das Sprints anteriores:**
+- Event-driven, sem cron (PR #27).
+- Fire-and-forget no dispatch (PR #27).
+- Cálculo > persistência quando barato (streak derivado).
+- Catálogo em código > tabela quando schema estável.
+- Notificação só em evento REAL transacional.
+- Idempotência em camadas (filtro + unique + skipDuplicates).
+
+---
+
+## Sprint 10 — Coach Intelligence Layer 🧠
+
+| PR | Tema | Status |
+|----|------|--------|
+| #28 | Coach Briefing Semanal (IA sintetiza assessoria) | ✅ Mergeado |
+| #29 | AI Progression Suggestion (Workout Builder) | ✅ Mergeado |
+| #30 | AI Plan Drafting (treino — nutrição postergada pra Sprint 11) | ✅ Implementado |
+
+**PR #28 — entregue:**
+- Prisma: model `CoachBriefing` (1 briefing ativo por professor, JSONB result+meta, TTL 24h via `expiresAt`). Migration `20260519100000_coach_briefing`.
+- Backend: `src/services/coachBriefingData.service.js` — agregador puro (sem IA) que reusa `listAlertasProf` + lookup leve de planos/provas/modalidades. **Cap 50 alunos** no prompt, residual contado. **Privacidade**: nome encurtado `"Carlos M."` antes de ir pro LLM.
+- Backend: `src/services/coachBriefing.service.js` — orquestra cache → snapshot → LLM (Anthropic Haiku 4.5, tool_use estruturado, prompt cached). **Fence pós-Zod** filtra alunoIds que não pertencem ao coach (defesa contra alucinação). **Stale fallback**: LLM down + cache existente → serve antigo com `stale: true`. Sem cache + LLM down → 504 honesto.
+- Backend: `GET /coach/briefing` (cache-aware) + `POST /coach/briefing/refresh` (force-regen, rate-limit 3/h/coach).
+- Frontend: `CoachBriefingCard.tsx` com **5 estados** (loading/empty/fresh/stale/error) + refresh manual. Alunos em alerta linkam pra `/professor/aluno/:id`. Integrado em `pages/professor/Dashboard.tsx`.
+- Testes: Backend **325** (era 310, +15). Frontend **147** (era 139, +8).
+- Bundle: Professor Dashboard chunk +0.66 KB Gzip (CoachBriefingCard inline). Index principal **85.89 KB Gzip** sem mudança.
+- Custo estimado: ~$0.001/call → ~$0.030/mês/coach com cache TTL 24h.
+
+**PR #29 — entregue:**
+- Backend: `src/services/aiProgressionData.service.js` — **set-resolution snapshot** (últimas 5 execuções, sets crus com kg/reps/rpe) via GIN seek `@>` no JSON `Treino.detalhes`. Reusa padrão do `historicoCargas` (PR #7). Computa `rpeMedioRecente`, `houveFalhaDeReps` (drop >25% reps entre sets), `diasDesdeUltima`. Helper `checkProfessorOwnership` (anti billing-drain pré-LLM).
+- Backend: `src/services/aiProgression.service.js` — orquestra ownership check → snapshot → Anthropic Haiku 4.5 tool_use → Zod estrito → Zod repair tolerante. **Branch dedicada MUSCULAÇÃO vs CALISTENIA** com system prompts distintos (calistenia: progressão pela string `reps`, kg sempre null mesmo se LLM teimar).
+- Backend: `src/schemas/aiProgression.schemas.js` — `suggestedProgressionSchema` com **5 campos + `tipoProgressao` enum** (`intensidade`/`volume`/`manutencao`/`deload`). Request schema com `modalidade` discriminator.
+- Backend: `POST /api/coach/ai-progression/exercise` — `protect` + `requireRole('PROFESSOR')` + ownership-check no service + **rate-limit 30/h/coach**.
+- Frontend: `src/lib/api/aiProgression.ts` — client tipado.
+- Frontend: `src/components/professor/ExerciseBlockAISuggest.tsx` — **botão 💡 + popover inline** com 4 estados (idle/loading/suggestion/error). Badge `tipoProgressao` colorido (intensidade=accent, volume=warn, manutencao=ink-muted, deload=danger). **HITL puro**: Aplicar preenche `series` + `reps` (parsing "8-10" → 10), kg/RPE/justificativa ficam visíveis como referência sem auto-fill de `cargaPctRP`.
+- Frontend: integração em `FormMusculacao.tsx` (botão por bloco) + `Prescrever.tsx` (passa `alunoId` adiante).
+- Testes: Backend **344** (era 325, +19). Frontend **163** (era 147, +16).
+- Bundle: Prescrever chunk +1.27 KB Gzip (era 8.50 → 9.77). Index principal **85.88 KB Gzip** intacto.
+- Custo estimado: ~$0.0003/sugestão. 8 exercícios × 1 click cada = ~$0.0024/treino criado.
+
+**PR #30 — entregue:**
+- **Migration nova**: `20260520100000_pg_trgm_exercicio` — `CREATE EXTENSION IF NOT EXISTS pg_trgm` + `CREATE INDEX gin_trgm_ops` em `Exercicio.nome`. Idempotente (re-run safe).
+- Backend: `src/lib/exercicioMatch.js` — **fuzzy match batched** via UNNEST + LATERAL JOIN. Single round-trip Postgres pra N exercícios. Thresholds verde≥0.9 / laranja≥0.6 / vermelho<0.6. **Fallback ILIKE** gracioso quando pg_trgm indisponível (score artificial 0.5, todos laranjas, warning logado).
+- Backend: `src/services/aiDraftTreino.service.js` — pipeline ACL → ownership pre-LLM (anti billing-drain) → contexto leve opcional do aluno → Anthropic Haiku 4.5 com tool_use + system cached → Zod estrito + repair tolerante → fuzzy match batch → hidratação de exercicioId/score/confianca → meta agregada.
+- Backend: `src/schemas/aiDraft.schemas.js` — caps `MAX_DIAS=7`, `MAX_EXERCICIOS_POR_DIA=12`. **Defesa dupla**: JSON Schema da Anthropic (min/max) + Zod no servidor.
+- Backend: `POST /api/coach/ai-draft/treino` com rate-limit **10/h/coach** (mais agressivo que progression — geração é 6x mais cara).
+- Frontend: `lib/api/aiDraft.ts` + `AIDraftExercicioPreview.tsx` (semáforo verde/laranja/vermelho) + `AIDraftModal.tsx` (4 estados: prompt/loading/preview/error) **lazy chunk separado**.
+- Frontend: Botão "✨ Gerar rotina com IA" no topo de musculação do Workout Builder. Aplica `diasSugeridos[0]` ao form atual (toast informa restantes); confirma overwrite se já há exercícios preenchidos.
+- Testes: Backend **371** (era 344, +27). Frontend **179** (era 163, +16).
+- Bundle: `AIDraftModal` lazy chunk **2.44 KB Gzip** (alvo era 5-7KB, ficou abaixo). Prescrever chunk **10.30 KB Gzip** (+0.53 KB do botão+handler+parseRepsRange). Index principal **85.88 KB Gzip** intacto.
+- Custo estimado: ~$0.002/draft × ~5 drafts/dia/coach = ~$0.01/dia/coach.
+
+---
+
+## Sprint 10 — FECHADA 🧠💡🏗️
+
+**3 PRs cravados em sequência cirúrgica (leitura → sugestão → geração):**
+- #28 Read · síntese semanal cacheada
+- #29 Suggest · progressão pontual HITL
+- #30 Generate · esqueleto de rotina com fuzzy match catálogo
+
+**Métricas Sprint 10:**
+- Backend tests: 310 → **371** (+61, +20%).
+- Frontend tests: 139 → **179** (+40, +29%).
+- Index bundle Gzip: 85.89 → **85.88 KB** (-1 byte, lazy paying dividends).
+- Migrations: +2 (`CoachBriefing`, `pg_trgm_exercicio`).
+- Endpoints novos: 5 (`/coach/briefing` GET, `/coach/briefing/refresh` POST, `/coach/ai-progression/exercise` POST, `/coach/ai-draft/treino` POST).
+- Custo IA total estimado por coach ativo: ~$0.04/mês (briefing $0.030 + progression $0.005 + draft $0.005).
+
+**Tech-debt aberto:**
+- VAPID hash check no boot do server (PR #26, ~30min) — alerta se key rotacionou silenciosamente.
+- ESLint config legacy pre-existente — não bloqueia build/test.
+
+---
+
+## Sprint 9 — Interações Avançadas & IA (HCI + Push Era)
+
+| PR | Tema | Status |
+|----|------|--------|
+| #25 | Diário de Voz BJJ com IA (Voice-to-JSON via Anthropic Claude tool_use) | ✅ Mergeado |
+| #26 | Web Push Notifications (VAPID + injectManifest SW custom) | ✅ Mergeado |
+| #27 | Triggers de Engajamento (Nutrição + Prescrição + Glória) | ✅ Implementado |
+
+**PR #25 — entregue:**
+- Backend: `POST /api/voice/parse-bjj` (protected + role ALUNO + rate-limit 20/dia/user). Anthropic Claude Haiku 4.5 com tool_use estruturado. Áudio in-memory (nunca toca disco/S3). Magic bytes detection (LGPD-friendly). Allowlist mime generosa Safari/iOS.
+- Frontend: `VoiceDiary.tsx` lazy chunk **2.67 KB Gzip**. `voiceDrafts.ts` IndexedDB store TTL 7d. Banner de rascunho no remount resolve cenário vestiário→rua.
+- Testes: Backend **271** (+28). Frontend **116** (+16).
+
+**PR #26 — entregue:**
+- Backend: `web-push` SDK + VAPID env vars (forever-coupled — rotação invalida tudo). Endpoints `GET /push/vapid-public-key` (público), `POST /push/subscriptions` (upsert idempotente), `DELETE /push/subscriptions` (scoped por userId), `POST /push/test` (dev-only). Service `push.service.dispatch({userId, payload})` é abstração única — fan-out via `Promise.allSettled`, cleanup inline em 410/404, `lastUsedAt` updates batch.
+- Prisma: model `PushSubscription` (userId FK, endpoint UNIQUE, p256dh+auth, userAgent debug). Migration `20260518200000_push_subscriptions`.
+- Frontend: **vite.config migrado de `generateSW` → `injectManifest`**. `src/sw.ts` custom porta runtimeCaching 1:1 + listeners `push` / `notificationclick` (foco de aba via `clients.matchAll` + `navigate`/`openWindow` fallback) / `pushsubscriptionchange` (re-subscribe automático).
+- Frontend: `lib/push/registerPush.ts` com **detecção iOS Safari + standalone check** — 5 estados (`unsupported`, `ios-needs-install`, `denied`, `granted-unsubscribed`, `subscribed`). `NotificationsToggle.tsx` no perfil.
+- Testes: Backend **294** (era 271, +23). Frontend **139** (era 116, +23).
+- Bundle: `sw.mjs` **9.12 KB Gzip**. Perfil chunk +1.56 KB Gzip (NotificationsToggle inline). `index` principal **85.88 KB Gzip** (sem mudança).
+
+**VAPID setup (one-time):**
+```bash
+npx web-push generate-vapid-keys
+# Setar VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY, VAPID_SUBJECT (mailto:),
+# PUSH_ENABLED=true no .env de cada ambiente. NUNCA rotacionar — invalida
+# todas subscriptions existentes.
+```
+
+**PR #27 — entregue:**
+- `src/lib/pushTriggers.js` — **abstração única** com `firePush({userId, payload, trigger})`. Fire-and-forget via `queueMicrotask`, try/catch silencia erros, audit estruturado JSON em stdout (level info/warn/debug). Builders de payload centralizados (`payloadNovoPlanoAlimentar`, `payloadNovoTreinoPrescrito`, `payloadNovoRecorde` com **agregação anti-flood** 1 RP vs N RPs).
+- **3 gatilhos plugados** event-driven puros:
+  - `plano.service.createPlano` → push pro **aluno.userId** (NUTRI dispara, ALUNO recebe). URL `/aluno/perfil`.
+  - `treino.service.clonarTreino` → push pro **aluno alvo.userId** (lookup mínimo via `select: {userId:true}`). URL `/aluno/dashboard`.
+  - `execucao.service.salvarExecucao` → push pro **user.userId** se houver RPs novos. URL `/aluno/rps`. **Agregação**: 3 RPs num mesmo treino = 1 push agregado, não 3.
+- Garantias: **push falhar nunca causa 5xx** no fluxo principal (queueMicrotask + catch). 503 (feature off) loga em debug — não polui stderr de dev.
+- Sem novas rotas. Sem cron. Sem opt-out por categoria (decisão consciente — escopo cirúrgico).
+- Testes: Backend **310** (era 294, +16). Frontend inalterado (UI não muda neste PR).
+- Setup de teste: `setup-env.js` agora seta `DATABASE_URL` dummy — services importam pushTriggers → push.service → env transitivamente, todos testes precisam.
 
 Aplicação web mobile-first para prescrição e execução de treinos
 multi-modalidade (musculação, corrida, ciclismo, natação, triathlon, hyrox)
