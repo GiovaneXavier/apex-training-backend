@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 import webpush from 'web-push';
 
 import { env } from '../lib/env.js';
@@ -150,4 +152,20 @@ export function getVapidPublicKey() {
     throw new HttpError(503, 'Push notifications desabilitado');
   }
   return env.VAPID_PUBLIC_KEY;
+}
+
+// PR #36 — hash SHA-256 (base64url) da VAPID public key.
+//
+// Client valida em dois momentos:
+//   1. Em trânsito  — recomputa SHA-256(key) e compara com este hash. Detecta
+//      cache HTTP/proxy corrompido.
+//   2. Persistência — armazena o hash junto da subscription ativa. Se hash do
+//      server muda, SW velho desinscreve antes de re-subscrever com a nova
+//      applicationServerKey. Sem isso, browser registra endpoint contra chave
+//      antiga e push falha 410 silencioso no dispatch.
+export function getVapidPublicKeyHash() {
+  if (!env.pushEnabled) {
+    throw new HttpError(503, 'Push notifications desabilitado');
+  }
+  return createHash('sha256').update(env.VAPID_PUBLIC_KEY).digest('base64url');
 }
