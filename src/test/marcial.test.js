@@ -100,6 +100,12 @@ mock.module('../lib/prisma.js', {
           return { id: where.id };
         },
       },
+      // PR #31 — stubs pra engine de conquistas (queueMicrotask em
+      // registrarPromocao dispara avaliarConquistas).
+      conquistaDesbloqueada: {
+        findMany: async () => [],
+        createMany: async () => ({ count: 0 }),
+      },
       $queryRaw: async () => state.matTimeRows,
     },
   },

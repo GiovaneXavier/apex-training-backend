@@ -37,6 +37,10 @@ export function requireAuth(req, res, next) {
 export function requireRole(...roles) {
   return (req, res, next) => {
     if (!req.user) return next(new HttpError(401, 'Não autenticado'));
+    // PR #32.5 — ADMIN bypassa requireRole. God-mode operacional pra
+    // QA/E2E navegar livre por endpoints PROFESSOR/NUTRI/ALUNO sem
+    // precisar fabricar vínculos. Emissão restrita ao seed:admin.
+    if (req.user.role === 'ADMIN') return next();
     if (!roles.includes(req.user.role)) return next(new HttpError(403, 'Acesso negado'));
     next();
   };

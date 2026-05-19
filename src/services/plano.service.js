@@ -1,6 +1,7 @@
 import { prisma } from '../lib/prisma.js';
 import { resolveAlunoAccess } from '../lib/access.js';
 import { HttpError } from '../middleware/errorHandler.js';
+import { firePush, payloadNovoPlanoAlimentar } from '../lib/pushTriggers.js';
 
 // PR #18b — PlanoAlimentar (PDF + metas).
 //
@@ -79,6 +80,16 @@ export async function createPlano({ user, input }) {
       },
     }),
   ]);
+
+  // PR #27 — Gatilho da Nutrição. NUTRI dispara, ALUNO recebe.
+  // `aluno.userId` vem do guardião resolveAlunoAccess (selecionou o
+  // registro Aluno completo). Fire-and-forget — não bloqueia o response.
+  firePush({
+    userId: aluno.userId,
+    payload: payloadNovoPlanoAlimentar(),
+    trigger: 'novo-plano-alimentar',
+  });
+
   return novo;
 }
 

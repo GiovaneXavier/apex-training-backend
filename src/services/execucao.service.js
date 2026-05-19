@@ -1,6 +1,8 @@
 import { prisma } from '../lib/prisma.js';
 import { HttpError } from '../middleware/errorHandler.js';
 import { getRealizadoSchemaPorTipo } from '../schemas/execucao.schemas.js';
+import { firePush, payloadNovoRecorde } from '../lib/pushTriggers.js';
+import { avaliarConquistas } from '../lib/conquistasEngine.js';
 
 // Salva execução do aluno + detecta novos RPs (musculação por (exercicio, reps)).
 // Retorna { treino, novosRecordes }.
@@ -92,6 +94,45 @@ export async function salvarExecucao({ user, treinoId, input }) {
       status: sanitized.status ?? 'CONCLUIDO',
       finalizadoEm: sanitized.finalizadoEm ? new Date(sanitized.finalizadoEm) : new Date(),
     },
+  });
+
+  // PR #27 — Gatilho da Glória. ALUNO bate RP, ALUNO recebe push (própria
+  // user.userId — sem lookup extra).
+  // Anti-flood: payloadNovoRecorde agrega quando há >1 RP no mesmo treino.
+  // Retorna null se array vazio → firePush(null userId) é no-op silencioso.
+  const rpPayload = payloadNovoRecorde(novosRecordes);
+  if (rpPayload) {
+    firePush({
+      userId: user.userId,
+      payload: rpPayload,
+      trigger: 'novo-recorde',
+    });
+  }
+
+  // PR #31 — Conquistas (Sprint 11). 3 triggers em paralelo, todos
+  // fire-and-forget pelo engine. Conquista falhar NUNCA derruba o
+  // salvarExecucao (try/catch dentro do engine + queueMicrotask).
+  queueMicrotask(() => {
+    // STREAK reavalia em todo treino concluído — barato e cobre quem
+    // fechou a meta semanal exatamente agora.
+    void avaliarConquistas({
+      alunoId: aluno.id,
+      trigger: 'STREAK',
+      contexto: { treinoId },
+    });
+    // RP_FIRST + PACE_THRESHOLD: só faz sentido se houve RP novo.
+    if (novosRecordes.length > 0) {
+      void avaliarConquistas({
+        alunoId: aluno.id,
+        trigger: 'RP_FIRST',
+        contexto: { novosRecordes, treinoId },
+      });
+      void avaliarConquistas({
+        alunoId: aluno.id,
+        trigger: 'PACE_THRESHOLD',
+        contexto: { novosRecordes, treinoId },
+      });
+    }
   });
 
   return { treino: updated, novosRecordes };
