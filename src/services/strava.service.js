@@ -8,6 +8,7 @@ import {
   fetchActivity,
 } from '../lib/strava.js';
 import { encrypt, decrypt } from '../lib/crypto.js';
+import { matchAtividade } from './stravaMatch.service.js';
 
 // Tokens Strava persistidos em AES-256-GCM via lib/crypto.
 // Regra: cifrar antes de gravar; decifrar imediatamente antes de usar.
@@ -193,7 +194,10 @@ export async function processWebhookEvent(payload) {
   // Aspect handling.
   if (payload.aspect_type === 'delete') {
     // Strava deletou (ou ocultou) atividade. Refletimos local.
-    // deleteMany pra não estourar se já tiver sido removida.
+    // Cascade do schema cuida de StravaSugestao (FK ON DELETE CASCADE).
+    // Se essa atividade já tinha vinculado um treino via Tier 1, NÃO
+    // reverte o status — atleta pode ter executado mesmo assim; reverter
+    // unilateralmente é mais traiçoeiro que deixar o vínculo órfão.
     const result = await prisma.atividadeStrava.deleteMany({
       where: { stravaId: stravaActivityId, alunoId: aluno.id },
     });
@@ -223,17 +227,29 @@ export async function processWebhookEvent(payload) {
     payloadRaw: activity,
     sincronizadoEm: new Date(),
   };
-  await prisma.atividadeStrava.upsert({
+  const persisted = await prisma.atividadeStrava.upsert({
     where: { stravaId: stravaActivityId },
     create: { alunoId: aluno.id, stravaId: stravaActivityId, ...data },
     update: data,
   });
 
-  // PR #41b vai pluggar aqui o matching contra treinos. Hoje apenas persiste.
+  // PR #41b — dispara matching engine. matchAtividade é idempotente
+  // (skip se sugestão/vínculo já existe), então re-disparar webhook é seguro.
+  // Erro no matching NÃO deve derrubar o webhook handler — atividade já
+  // foi persistida e Strava precisa de 200 dentro de 2s.
+  let matchResult = null;
+  try {
+    matchResult = await matchAtividade(persisted);
+  } catch (err) {
+    console.error('[strava-match] erro processando match', err?.message || err);
+    matchResult = { acao: 'erro', motivo: 'exception_capturada' };
+  }
+
   return {
     processed: true,
     action: payload.aspect_type === 'create' ? 'created' : 'updated',
     stravaActivityId,
     alunoId: aluno.id,
+    match: matchResult,
   };
 }

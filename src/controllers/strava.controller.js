@@ -9,6 +9,12 @@ import {
   listAtividades,
   processWebhookEvent,
 } from '../services/strava.service.js';
+import {
+  listarSugestoesPendentes,
+  aceitarSugestao,
+  rejeitarSugestao,
+  desfazerMatch,
+} from '../services/stravaMatch.service.js';
 import { HttpError } from '../middleware/errorHandler.js';
 import { env } from '../lib/env.js';
 
@@ -84,6 +90,60 @@ export async function atividades(req, res, next) {
       limit,
     });
     res.json({ atividades: data });
+  } catch (err) {
+    next(err);
+  }
+}
+
+// ─── PR #41b — Matching engine HTTP (autenticado, ALUNO) ────────────
+//
+// GET    /api/strava/sugestoes             → lista PENDENTE do aluno logado
+// POST   /api/strava/sugestoes/:id/aceitar → vincula treino (Tier 2 → resolvido)
+// POST   /api/strava/sugestoes/:id/rejeitar → REJEITADA + grava cooldown
+// POST   /api/strava/treinos/:id/desfazer-strava → undo Tier 1 (auto-match)
+
+const idParamSchema = z.object({
+  id: z.string().min(1, 'id obrigatório').max(64, 'id muito longo'),
+});
+
+export async function listarSugestoes(req, res, next) {
+  try {
+    ensureAluno(req);
+    const sugestoes = await listarSugestoesPendentes(req.user.userId);
+    res.json({ sugestoes });
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function aceitarSugestaoCtrl(req, res, next) {
+  try {
+    ensureAluno(req);
+    const { id } = idParamSchema.parse(req.params);
+    const result = await aceitarSugestao({ userId: req.user.userId, sugestaoId: id });
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function rejeitarSugestaoCtrl(req, res, next) {
+  try {
+    ensureAluno(req);
+    const { id } = idParamSchema.parse(req.params);
+    const result = await rejeitarSugestao({ userId: req.user.userId, sugestaoId: id });
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function desfazerMatchCtrl(req, res, next) {
+  try {
+    ensureAluno(req);
+    const { id: treinoId } = idParamSchema.parse({ id: req.params.treinoId });
+    const result = await desfazerMatch({ userId: req.user.userId, treinoId });
+    res.json(result);
   } catch (err) {
     next(err);
   }
