@@ -196,6 +196,8 @@ model Aluno {
   promocoes     EvolucaoMarcial[]
   conquistas    ConquistaDesbloqueada[]
   insightSemanal AlunoInsightSemanal?
+  matchesRejeitados MatchRejeitado[]
+  stravaSugestoes   StravaSugestao[]
 }
 
 // PR #31 — Conquistas desbloqueadas por aluno (Sprint 11).
@@ -355,8 +357,15 @@ model Treino {
   iniciadoEm  DateTime?
   finalizadoEm DateTime?
   reagendadoDe DateTime?    // dataAlvo original antes de reagendar
+  // PR #41b — vínculo Strava↔Treino. Preenchido em match Tier 1 (auto, score>=0.92)
+  // ou via opt-in do aluno (sugestão Tier 2). UNIQUE garante que uma atividade
+  // Strava só vincula a um treino (regra de produto: 1:1).
+  stravaActivityId String? @unique
   criadoEm    DateTime      @default(now())
   atualizadoEm DateTime     @updatedAt
+
+  matchesRejeitados MatchRejeitado[]
+  stravaSugestoes   StravaSugestao[]
 
   @@index([alunoId, dataAlvo])
   @@index([status])
@@ -456,7 +465,68 @@ model AtividadeStrava {
   payloadRaw   Json     @db.JsonB
   sincronizadoEm DateTime @default(now())
 
+  sugestoes    StravaSugestao[]
+
   @@index([alunoId, iniciadoEm])
+}
+
+// ──────────────────────────────────────────────────────────────
+// PR #41b — Motor de match Strava ↔ Treino prescrito.
+//
+// MatchRejeitado: registro de cooldown. Quando aluno rejeita uma sugestão
+// (ou Tier 1 é desfeito, ou match cai abaixo do threshold por estar bloqueado),
+// gravamos o par (treinoId, stravaActivityId) aqui. O motor consulta antes
+// de re-sugerir — evita "fica oferecendo a mesma sugestão indefinidamente".
+//
+// @@unique garante idempotência: re-processar mesmo webhook não duplica.
+// onDelete Cascade: aluno/treino some, cooldown some junto.
+// ──────────────────────────────────────────────────────────────
+model MatchRejeitado {
+  id               String   @id @default(cuid())
+  alunoId          String
+  treinoId         String
+  stravaActivityId String   // referência lógica (Strava id) — não FK forte
+  motivo           String   // 'manual_reject' | 'auto_below_threshold' | 'multi_match_veto' | 'brick_veto' | 'undone_tier1'
+  scoreNaRecusa    Float?
+  criadoEm         DateTime @default(now())
+
+  aluno  Aluno  @relation(fields: [alunoId], references: [id], onDelete: Cascade)
+  treino Treino @relation(fields: [treinoId], references: [id], onDelete: Cascade)
+
+  @@unique([treinoId, stravaActivityId])
+  @@index([alunoId, criadoEm])
+  @@index([stravaActivityId])
+}
+
+// StravaSugestao: Tier 2 retido aguardando opt-in manual do aluno.
+//
+// `score` é o resultado do calcularScore (0..1). `scoreBreakdown` é JSON do
+// objeto de pesos por eixo — usado pra explainability na UI ("matchou em
+// distância + tipo, divergiu em duração").
+//
+// status fluxo:
+//   PENDENTE → ACEITA (aluno aceita) | REJEITADA (aluno rejeita) | EXPIRADA (atividade deletada / treino removido)
+//
+// @@unique(atividadeStravaId): 1 atividade Strava → no máximo 1 sugestão ativa
+// por vez. Mais de um treino candidato vira escolha do aluno, não duas
+// sugestões paralelas.
+model StravaSugestao {
+  id                String   @id @default(cuid())
+  alunoId           String
+  treinoId          String
+  atividadeStravaId String   @unique
+  score             Float
+  scoreBreakdown    Json     @db.JsonB
+  status            String   @default("PENDENTE") // PENDENTE | ACEITA | REJEITADA | EXPIRADA
+  criadaEm          DateTime @default(now())
+  resolvidaEm       DateTime?
+
+  aluno     Aluno           @relation(fields: [alunoId], references: [id], onDelete: Cascade)
+  treino    Treino          @relation(fields: [treinoId], references: [id], onDelete: Cascade)
+  atividade AtividadeStrava @relation(fields: [atividadeStravaId], references: [id], onDelete: Cascade)
+
+  @@index([alunoId, status, criadaEm])
+  @@index([treinoId])
 }
 
 // ──────────────────────────────────────────────────────────────
