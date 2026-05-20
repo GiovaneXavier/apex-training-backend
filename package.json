@@ -13,6 +13,9 @@
     "prisma:studio": "prisma studio",
     "db:seed": "node prisma/seed.js",
     "seed:admin": "node prisma/seed-admin.js",
+    "strava:webhook:list": "node scripts/registerStravaWebhook.js list",
+    "strava:webhook:register": "node scripts/registerStravaWebhook.js register",
+    "strava:webhook:delete": "node scripts/registerStravaWebhook.js delete",
     "test": "node --test --import=./src/test/setup-env.js --experimental-test-module-mocks \"src/test/**/*.test.js\""
   },
   "dependencies": {

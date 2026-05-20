@@ -88,6 +88,15 @@ const envSchema = z.object({
   STRAVA_REDIRECT_URI: z.string().url().optional().or(z.literal('')),
   // AES-256-GCM key para criptografar tokens Strava no banco (sprint 1, PR #3).
   STRAVA_TOKEN_KEY: strava256BitKey.optional().or(z.literal('')),
+  // PR #41a (Sprint 15) — Webhook do Strava.
+  // VERIFY_TOKEN: string aleatória validada no challenge GET inicial pra
+  // provar pro Strava que somos donos do endpoint. Strava NÃO envia este
+  // token nos POST events — só no setup da subscription.
+  STRAVA_VERIFY_TOKEN: z.string().min(16, 'STRAVA_VERIFY_TOKEN deve ter >= 16 chars').optional().or(z.literal('')),
+  // CALLBACK_URL: URL pública do endpoint /api/strava/webhook.
+  // Dev: ngrok/cloudflare tunnel. Prod: domínio do Render. Strava só
+  // aceita HTTPS em prod (HTTP libera só pra localhost test).
+  STRAVA_WEBHOOK_CALLBACK_URL: z.string().url().optional().or(z.literal('')),
 
   // S3 — opcional
   AWS_REGION: z.string().optional().or(z.literal('')),
@@ -156,6 +165,15 @@ function crossValidate(parsed) {
   }
   if (parsed.STRAVA_CLIENT_ID && parsed.STRAVA_CLIENT_SECRET && !parsed.STRAVA_REDIRECT_URI) {
     errors.push('STRAVA_REDIRECT_URI obrigatório quando Strava ativa.');
+  }
+
+  // PR #41a — Webhook é opcional; mas as duas vars viajam juntas (verify
+  // token sem callback não registra subscription, e vice-versa).
+  if (Boolean(parsed.STRAVA_VERIFY_TOKEN) !== Boolean(parsed.STRAVA_WEBHOOK_CALLBACK_URL)) {
+    errors.push('Configuração de webhook Strava parcial. Setar STRAVA_VERIFY_TOKEN e STRAVA_WEBHOOK_CALLBACK_URL juntos.');
+  }
+  if (parsed.STRAVA_VERIFY_TOKEN && !parsed.STRAVA_CLIENT_ID) {
+    errors.push('Webhook Strava exige OAuth configurado (STRAVA_CLIENT_ID/SECRET).');
   }
 
   // S3: se algum, exigir region+bucket pelo menos (credenciais podem vir de IAM role).
@@ -238,6 +256,10 @@ function loadEnv() {
     corsOrigins,
     stravaEnabled: Boolean(
       result.data.STRAVA_CLIENT_ID && result.data.STRAVA_CLIENT_SECRET,
+    ),
+    // PR #41a — webhook é subset opcional da feature Strava.
+    stravaWebhookEnabled: Boolean(
+      result.data.STRAVA_VERIFY_TOKEN && result.data.STRAVA_WEBHOOK_CALLBACK_URL,
     ),
     s3Enabled: Boolean(result.data.AWS_REGION && result.data.S3_BUCKET),
     voiceEnabled: Boolean(result.data.VOICE_ENABLED && result.data.ANTHROPIC_API_KEY),
