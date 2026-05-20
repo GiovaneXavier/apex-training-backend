@@ -19,7 +19,10 @@ export function errorHandler(err, req, res, next) {
         path: req?.path, method: req?.method, status: err.status,
       });
     }
-    return res.status(err.status).json({ error: err.name || 'Error', message: err.message });
+    // PR #37 — meta opcional propagado pro client (ex: 409 com alvo atual).
+    const body = { error: err.name || 'Error', message: err.message };
+    if (err.meta && typeof err.meta === 'object') Object.assign(body, err.meta);
+    return res.status(err.status).json(body);
   }
   // Compat: outros erros com .status (improvável após PR #5) tratados
   // se forem 4xx (mensagem aceita); 5xx vai pro genérico abaixo.
@@ -37,9 +40,12 @@ export function errorHandler(err, req, res, next) {
 }
 
 export class HttpError extends Error {
-  constructor(status, message) {
+  constructor(status, message, meta) {
     super(message);
     this.status = status;
     this.name = 'HttpError';
+    // PR #37 — meta opcional (ex: { code, alvoAtual } no 409 de Race A).
+    // Compatível: chamadas existentes `new HttpError(status, msg)` não mudam.
+    if (meta) this.meta = meta;
   }
 }
