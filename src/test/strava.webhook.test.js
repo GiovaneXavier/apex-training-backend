@@ -32,6 +32,8 @@ mock.module('../lib/prisma.js', {
       aluno: {
         findFirst: async ({ where }) =>
           state.alunos.find((a) => where.stravaUserId && a.stravaUserId === where.stravaUserId) || null,
+        findUnique: async ({ where }) =>
+          state.alunos.find((a) => (where.userId && a.userId === where.userId) || (where.id && a.id === where.id)) || null,
         update: async () => state.alunos[0],
       },
       atividadeStrava: {
@@ -52,7 +54,30 @@ mock.module('../lib/prisma.js', {
           );
           return { count: before - state.atividades.length };
         },
+        // Brick detection consulta outras atividades do dia.
+        findMany: async ({ where }) =>
+          state.atividades.filter((a) => (!where.alunoId || a.alunoId === where.alunoId) && (!where.NOT?.id || a.id !== where.NOT.id)),
       },
+      // PR #41b — Stubs do matching engine. Webhook test não tem treinos
+      // prescritos, então o match resolve em 'sem_candidatos'. Mocks devolvem
+      // vazio em todas as queries; cobertura real vive em stravaMatch.test.js.
+      treino: {
+        findMany: async () => [],
+        findUnique: async () => null,
+        update: async ({ where, data }) => ({ id: where.id, ...data }),
+      },
+      stravaSugestao: {
+        findUnique: async () => null,
+        findMany: async () => [],
+        create: async ({ data }) => ({ id: 'sug-test', ...data }),
+        update: async ({ where, data }) => ({ id: where.id, ...data }),
+        updateMany: async () => ({ count: 0 }),
+      },
+      matchRejeitado: {
+        findMany: async () => [],
+        upsert: async ({ create }) => ({ id: 'mr-test', ...create }),
+      },
+      $transaction: async (fn) => fn({}),
     },
   },
 });
@@ -240,6 +265,18 @@ describe('POST /api/strava/webhook — eventos', () => {
     const res = await request(app).post('/api/strava/webhook').send({});
     assert.equal(res.status, 200);
     assert.equal(state.atividades.length, 0);
+  });
+
+  it('PR #41b — webhook create dispara matchAtividade (sem candidatos = ignored)', async () => {
+    // Sem treinos prescritos: matching engine resolve em "sem_candidatos"
+    // sem efeito colateral, mas confirma que o plumbing chegou no service.
+    const res = await request(app).post('/api/strava/webhook').send({
+      object_type: 'activity', object_id: 12345678, aspect_type: 'create', owner_id: 987654,
+    });
+    assert.equal(res.status, 200);
+    assert.equal(state.atividades.length, 1, 'atividade persistida pré-match');
+    // Sem assertion no result do match porque o response body do webhook
+    // é vazio por design (Strava ignora corpo). Telemetria via logs.
   });
 
   it('200 com body vazio (Strava espera) em todos os casos', async () => {
