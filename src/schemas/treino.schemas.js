@@ -322,3 +322,15 @@ export const listTreinosQuery = z.object({
   ate: z.string().datetime().optional(),
   limit: z.coerce.number().int().min(1).max(200).default(50),
 });
+
+// PR #41c — ACK de auto-match Tier 1.
+// Frontend bate este endpoint após exibir o toast "X autopreenchidos —
+// Desfazer", batch de IDs vistos. Limite de 50 evita payload abusivo
+// (cardinalidade real é ~1-5 em fluxo normal). Cada id é validado por
+// formato (cuid-ish, 24 chars min, alphanum) — defesa rasa mas barata.
+export const ackAutoMatchSchema = z.object({
+  ids: z
+    .array(z.string().min(1).max(64))
+    .min(1, 'pelo menos 1 id')
+    .max(50, 'máx 50 ids por batch'),
+});

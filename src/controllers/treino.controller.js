@@ -1,4 +1,9 @@
-import { listTreinosQuery, prescreverSchema, clonarTreinoSchema } from '../schemas/treino.schemas.js';
+import {
+  listTreinosQuery,
+  prescreverSchema,
+  clonarTreinoSchema,
+  ackAutoMatchSchema,
+} from '../schemas/treino.schemas.js';
 import { salvarExecucaoSchema } from '../schemas/execucao.schemas.js';
 import {
   listTreinosByAluno,
@@ -7,6 +12,7 @@ import {
   clonarTreino,
   deleteTreino,
   historicoCargas,
+  ackStravaAutoMatch,
 } from '../services/treino.service.js';
 import { salvarExecucao as salvarExecucaoSvc } from '../services/execucao.service.js';
 
@@ -74,6 +80,18 @@ export async function clonar(req, res, next) {
 export async function remover(req, res, next) {
   try {
     const result = await deleteTreino({ user: req.user, treinoId: req.params.id });
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+}
+
+// PR #41c — ACK em batch de auto-matches Tier 1.
+// Endpoint chamado pelo Dashboard após exibir toast "X autopreenchidos".
+export async function ackAutoMatch(req, res, next) {
+  try {
+    const { ids } = ackAutoMatchSchema.parse(req.body);
+    const result = await ackStravaAutoMatch({ user: req.user, ids });
     res.json(result);
   } catch (err) {
     next(err);

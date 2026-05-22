@@ -361,6 +361,14 @@ model Treino {
   // ou via opt-in do aluno (sugestão Tier 2). UNIQUE garante que uma atividade
   // Strava só vincula a um treino (regra de produto: 1:1).
   stravaActivityId String? @unique
+  // PR #41c — ACK de auto-match Tier 1. Tier 1 vincula silenciosamente via
+  // webhook; flag em FALSE sinaliza "aluno ainda não viu o auto-match" e o
+  // Dashboard dispara toast "X autopreenchidos — Desfazer". ACK fica em TRUE
+  // após o frontend bater POST /treinos/strava-ack. Default TRUE no schema:
+  // vínculos Tier 2 (aceitar manual) já são "vistos" por definição, e linhas
+  // pré-migração ficam true → sem toast retroativo. Tier 1 grava false
+  // explicitamente em vincularTier1.
+  stravaAutoMatchAck Boolean @default(true)
   criadoEm    DateTime      @default(now())
   atualizadoEm DateTime     @updatedAt
 
@@ -376,6 +384,10 @@ model Treino {
   // Aplicado no PR #7 via raw SQL; declarado aqui no PR #10 pra alinhar
   // o schema com o DB e parar o drift detection do Prisma.
   @@index([detalhes(ops: JsonbPathOps)], type: Gin, map: "Treino_detalhes_gin_idx")
+  // PR #41c — partial index para WHERE stravaAutoMatchAck = false.
+  // Prisma não suporta partial WHERE em @@index, então é criado via raw SQL
+  // na migration (vide 20260525000000_strava_auto_match_ack). Declarado aqui
+  // só como anotação anti-drift.
 }
 
 // PR #37 (Sprint 14) — Macro-ciclo do atleta.

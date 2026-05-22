@@ -129,6 +129,43 @@ export async function deleteTreino({ user, treinoId }) {
   return { ok: true };
 }
 
+// PR #41c — ACK em batch dos auto-matches Tier 1 já vistos pelo aluno.
+//
+// Fluxo: webhook Strava roda matchAtividade → vincularTier1 grava
+// stravaAutoMatchAck=false. Dashboard do aluno carrega treinos da semana,
+// filtra `stravaActivityId && !stravaAutoMatchAck`, exibe toast
+// "X autopreenchidos — Desfazer". Após o render, frontend dispara este
+// endpoint com os ids para zerar a flag — evita toast repetido no próximo
+// reload e cross-device.
+//
+// Guards:
+//   - Apenas ALUNO (não faz sentido prof/nutri/admin "verem" toast).
+//   - updateMany filtra alunoId no WHERE → impossível ACK em treino alheio
+//     mesmo se enviado id de outro aluno (silenciosamente ignorado).
+//   - stravaActivityId NOT NULL no WHERE → não toca registros sem vínculo.
+//   - Idempotente: re-bater o mesmo id é no-op (já está em true).
+export async function ackStravaAutoMatch({ user, ids }) {
+  if (user.role !== 'ALUNO') throw new HttpError(403, 'Apenas alunos confirmam auto-match');
+  const aluno = await prisma.aluno.findUnique({
+    where: { userId: user.userId },
+    select: { id: true },
+  });
+  if (!aluno) throw new HttpError(404, 'Perfil de aluno não encontrado');
+
+  if (!Array.isArray(ids) || ids.length === 0) return { acked: 0 };
+
+  const result = await prisma.treino.updateMany({
+    where: {
+      id: { in: ids },
+      alunoId: aluno.id,
+      stravaActivityId: { not: null },
+      stravaAutoMatchAck: false,
+    },
+    data: { stravaAutoMatchAck: true },
+  });
+  return { acked: result.count };
+}
+
 // Histórico de carga: retorna o último set realizado de cada exercício
 // que o aluno executou, para sugerir kg/reps ao iniciar nova série.
 //
