@@ -293,7 +293,7 @@ describe('matchAtividade', () => {
     assert.equal(state.treinoUpdates.length, 0);
   });
 
-  it('1 candidato score≥0.92 → Tier 1 (auto): atualiza Treino', async () => {
+  it('1 candidato score≥0.92 → Tier 1 (auto): atualiza Treino + marca ack=false', async () => {
     state.treinos.push(makeTreino());
     const out = await mod.matchAtividade(makeAtividade());
     assert.equal(out.acao, 'auto_match');
@@ -302,6 +302,8 @@ describe('matchAtividade', () => {
     assert.equal(state.treinoUpdates.length, 1);
     assert.equal(state.treinoUpdates[0].data.stravaActivityId, '99999');
     assert.equal(state.treinoUpdates[0].data.status, 'CONCLUIDO');
+    // PR #41c — Tier 1 grava ack=false; Dashboard usa pra disparar toast.
+    assert.equal(state.treinoUpdates[0].data.stravaAutoMatchAck, false);
     assert.equal(state.sugestoesCriadas.length, 0);
   });
 

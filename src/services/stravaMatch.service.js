@@ -205,6 +205,11 @@ async function vincularTier1(atividade, scored) {
       stravaActivityId: atividade.stravaId,
       status: 'CONCLUIDO',
       finalizadoEm: scored.treino.finalizadoEm ?? new Date(),
+      // PR #41c — sinaliza "aluno ainda não viu este auto-match".
+      // Dashboard filtra `stravaActivityId && !stravaAutoMatchAck` para
+      // disparar toast "X autopreenchidos — Desfazer". Frontend marca
+      // como true via POST /treinos/strava-ack após exibir o toast.
+      stravaAutoMatchAck: false,
     },
   });
   return {
