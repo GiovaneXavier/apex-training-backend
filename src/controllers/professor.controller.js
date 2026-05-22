@@ -8,6 +8,7 @@ import {
   dashboardProfessor,
   listCalendarioAlunos,
 } from '../services/professor.service.js';
+import { listAlertasProf } from '../services/coach.service.js';
 import { HttpError } from '../middleware/errorHandler.js';
 
 const calendarioQuery = z.object({
@@ -85,6 +86,17 @@ export async function calendario(req, res, next) {
     const { desde, ate } = calendarioQuery.parse(req.query);
     const data = await listCalendarioAlunos(req.user.userId, { desde, ate });
     res.json(data);
+  } catch (err) {
+    next(err);
+  }
+}
+
+// PR #17 — alertas de aderência por aluno vinculado.
+export async function alertas(req, res, next) {
+  try {
+    ensureProf(req);
+    const alertas = await listAlertasProf({ user: req.user });
+    res.json({ alertas });
   } catch (err) {
     next(err);
   }

@@ -19,6 +19,11 @@ enum Role {
   ALUNO
   PROFESSOR
   NUTRICIONISTA
+  // PR #32.5 — God-mode pra QA/debug/e2e. Bypass total na ACL via
+  // access.js. NUNCA emitir em fluxo de cadastro normal — só via
+  // `npm run seed:admin` ou injeção manual no DB. Tratado como classe
+  // de superusuário operacional, NÃO papel de produto.
+  ADMIN
 }
 
 enum Modalidade {
@@ -28,7 +33,33 @@ enum Modalidade {
   NATACAO
   TRIATHLON
   HYROX
+  JIU_JITSU
   OUTRO
+}
+
+// PR #22 — domínio do exercício no catálogo.
+// Permite filtrar a biblioteca pelo contexto do mestre/professor sem
+// criar uma tabela separada (catálogo unificado mantém o picker do
+// RotinaForm reusável). MUSCULACAO continua sendo o default histórico.
+enum DominioExercicio {
+  MUSCULACAO
+  JIU_JITSU
+  MOBILIDADE
+  OUTRO
+}
+
+// PR #22 — tipo de movimento (mais granular que `dominio`).
+// Hoje usado SÓ para JIU_JITSU, mas o enum vive em column única no
+// catálogo pra permitir extensão futura (ex: TRACAO/EMPURRAO em
+// musculação) sem migration destrutiva.
+enum TipoMovimento {
+  DRILL
+  PASSAGEM
+  GUARDA
+  RASPAGEM
+  SUBMISSAO
+  ENTRADA
+  SAIDA
 }
 
 enum StatusTreino {
@@ -71,6 +102,22 @@ enum GrupoMuscular {
   OUTRO
 }
 
+// PR #24 — Faixas adultas IBJJF.
+// Sequência canônica: BRANCA → AZUL → ROXA → MARROM → PRETA.
+// CORAL (vermelha+preta) e VERMELHA representam grandes mestres —
+// endgame, sem meta de progresso na UI. Kids (cinza, amarela,
+// laranja, verde) ficam pro futuro sem migration destrutiva
+// (adicionar valores em enum Postgres é additive).
+enum Faixa {
+  BRANCA
+  AZUL
+  ROXA
+  MARROM
+  PRETA
+  CORAL
+  VERMELHA
+}
+
 model User {
   id           String   @id @default(cuid())
   email        String   @unique
@@ -88,9 +135,41 @@ model User {
   aluno         Aluno?
   professor     Professor?
   nutricionista Nutricionista?
+  pushSubscriptions PushSubscription[]
 
   @@index([role])
   @@index([ativo])
+}
+
+// PR #26 — Web Push subscription por device.
+//
+// 1 user → N subscriptions (multi-device: PC casa, celular, tablet).
+// Cada subscription representa um endpoint único do Push Service do
+// browser (FCM/APNs/Mozilla). Tratamos como recurso descartável:
+// quando o Push Service devolve 410 Gone ou 404, deleta inline.
+//
+// onDelete: Cascade cobre o cenário "user deletou conta" — subscriptions
+// somem sem orphans.
+//
+// `endpoint` é UNIQUE pra idempotência: re-subscribe do mesmo device
+// (pushsubscriptionchange ou reinstall PWA) faz upsert por endpoint sem
+// duplicar.
+model PushSubscription {
+  id         String   @id @default(cuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  endpoint   String   @unique
+  // Chaves de criptografia da W3C Push API. p256dh = chave pública ECDH
+  // do client; auth = secret de cifra do payload. Ambas base64url.
+  p256dh     String
+  auth       String
+  // Debug-only — ajuda a identificar "que device é esse?" quando o user
+  // pede ajuda. Não é fonte de verdade, apenas hint.
+  userAgent  String?
+  createdAt  DateTime @default(now())
+  lastUsedAt DateTime @default(now())
+
+  @@index([userId])
 }
 
 model Aluno {
@@ -113,6 +192,63 @@ model Aluno {
   atividades    AtividadeStrava[]
   rotinas       RotinaMusculacao[]
   evolucoes     EvolucaoCorporal[]
+  planos        PlanoAlimentar[]
+  promocoes     EvolucaoMarcial[]
+  conquistas    ConquistaDesbloqueada[]
+  insightSemanal AlunoInsightSemanal?
+  matchesRejeitados MatchRejeitado[]
+  stravaSugestoes   StravaSugestao[]
+}
+
+// PR #31 — Conquistas desbloqueadas por aluno (Sprint 11).
+//
+// Catálogo de conquistas vive EM CÓDIGO (src/data/conquistasCatalogo.js)
+// — não em DB. Esta tabela só registra QUANDO cada aluno desbloqueou
+// cada código. Adicionar nova conquista = PR de código (review natural),
+// não migration.
+//
+// @@unique([alunoId, codigo]) garante idempotência:
+//   - Engine pode rodar 2x (retry, reprocess) sem duplicar.
+//   - Push de marco dispara 1x só por desbloqueio.
+//
+// `contexto` JSONB audit: id do treino/RP/promoção que disparou.
+// Útil pra debug ("por que o aluno X tem essa conquista?") e pra
+// futuros recursos (linkar badge → treino original).
+//
+// onDelete Cascade: aluno deletado → conquistas somem com ele.
+model ConquistaDesbloqueada {
+  id             String   @id @default(cuid())
+  alunoId        String
+  aluno          Aluno    @relation(fields: [alunoId], references: [id], onDelete: Cascade)
+  codigo         String
+  desbloqueadoEm DateTime @default(now())
+  contexto       Json?
+
+  @@unique([alunoId, codigo])
+  @@index([alunoId])
+}
+
+// PR #32 — Insight semanal do aluno (Sprint 12 / Aluno Intelligence).
+//
+// Cache server-side do "fechamento da semana" gerado por IA. 1 ativo por
+// aluno (@@unique em alunoId). TTL 7 dias — alinhado com ciclo semanal,
+// regenera sob demanda na primeira abertura da semana.
+//
+// `result` JSONB: { summary, destaques[], origem: 'llm'|'fallback-estatico' }
+// `meta` JSONB: telemetria (modelo, snapshot resumido, tokens estimados,
+//   tentativas LLM, se foi regenerado por veto).
+//
+// onDelete Cascade: aluno some, insight some junto.
+model AlunoInsightSemanal {
+  id          String   @id @default(cuid())
+  alunoId     String   @unique
+  aluno       Aluno    @relation(fields: [alunoId], references: [id], onDelete: Cascade)
+  result      Json
+  meta        Json?
+  generatedAt DateTime @default(now())
+  expiresAt   DateTime
+
+  @@index([expiresAt])
 }
 
 model Professor {
@@ -124,6 +260,29 @@ model Professor {
   vinculos          VinculoProfessor[]
   treinosPrescritos Treino[]
   rotinas           RotinaMusculacao[]
+  briefing          CoachBriefing?
+}
+
+// PR #28 — Coach Briefing Semanal.
+//
+// Cache server-side da síntese IA. 1 briefing ativo por professor
+// (@@unique em professorId). TTL 24h padrão; botão "Atualizar agora"
+// no front faz upsert force-regen (com rate-limit 3/h na rota).
+//
+// `result` JSONB carrega o payload validado do LLM (summary +
+// alunosEmAlerta[] + alunosBemEncaminhados[]).
+// `meta` carrega telemetria reproducível (alunos considerados, modelo,
+// tokens estimados) pra debug/observabilidade — não vai pro front.
+model CoachBriefing {
+  id          String   @id @default(cuid())
+  professorId String   @unique
+  professor   Professor @relation(fields: [professorId], references: [id], onDelete: Cascade)
+  result      Json
+  meta        Json?
+  generatedAt DateTime @default(now())
+  expiresAt   DateTime
+
+  @@index([expiresAt])
 }
 
 model Nutricionista {
@@ -133,6 +292,7 @@ model Nutricionista {
   crn    String?
 
   vinculos VinculoNutricionista[]
+  planos   PlanoAlimentar[]
 }
 
 model VinculoProfessor {
@@ -197,8 +357,23 @@ model Treino {
   iniciadoEm  DateTime?
   finalizadoEm DateTime?
   reagendadoDe DateTime?    // dataAlvo original antes de reagendar
+  // PR #41b — vínculo Strava↔Treino. Preenchido em match Tier 1 (auto, score>=0.92)
+  // ou via opt-in do aluno (sugestão Tier 2). UNIQUE garante que uma atividade
+  // Strava só vincula a um treino (regra de produto: 1:1).
+  stravaActivityId String? @unique
+  // PR #41c — ACK de auto-match Tier 1. Tier 1 vincula silenciosamente via
+  // webhook; flag em FALSE sinaliza "aluno ainda não viu o auto-match" e o
+  // Dashboard dispara toast "X autopreenchidos — Desfazer". ACK fica em TRUE
+  // após o frontend bater POST /treinos/strava-ack. Default TRUE no schema:
+  // vínculos Tier 2 (aceitar manual) já são "vistos" por definição, e linhas
+  // pré-migração ficam true → sem toast retroativo. Tier 1 grava false
+  // explicitamente em vincularTier1.
+  stravaAutoMatchAck Boolean @default(true)
   criadoEm    DateTime      @default(now())
   atualizadoEm DateTime     @updatedAt
+
+  matchesRejeitados MatchRejeitado[]
+  stravaSugestoes   StravaSugestao[]
 
   @@index([alunoId, dataAlvo])
   @@index([status])
@@ -209,19 +384,49 @@ model Treino {
   // Aplicado no PR #7 via raw SQL; declarado aqui no PR #10 pra alinhar
   // o schema com o DB e parar o drift detection do Prisma.
   @@index([detalhes(ops: JsonbPathOps)], type: Gin, map: "Treino_detalhes_gin_idx")
+  // PR #41c — partial index para WHERE stravaAutoMatchAck = false.
+  // Prisma não suporta partial WHERE em @@index, então é criado via raw SQL
+  // na migration (vide 20260525000000_strava_auto_match_ack). Declarado aqui
+  // só como anotação anti-drift.
+}
+
+// PR #37 (Sprint 14) — Macro-ciclo do atleta.
+//
+// Vocabulário consagrado em coaching de endurance: Race A/B/C.
+//   A: alvo principal do ciclo (UMA ativa por aluno — partial unique index).
+//   B: prova de preparação importante.
+//   C: simulação/tune-up.
+//
+// `arquivada` é determinístico (boolean), não derivado de `data < now()`,
+// porque Postgres não aceita função volátil em partial unique index.
+// Atleta/coach arquiva manualmente (próximo PR pode adicionar auto-archive
+// noturno via cron).
+enum ProvaPrioridade {
+  A
+  B
+  C
 }
 
 model Prova {
-  id         String   @id @default(cuid())
-  alunoId    String
-  aluno      Aluno    @relation(fields: [alunoId], references: [id], onDelete: Cascade)
-  modalidade Modalidade
-  nome       String
-  data       DateTime
-  detalhes   Json     @db.JsonB
-  criadoEm   DateTime @default(now())
+  id           String          @id @default(cuid())
+  alunoId      String
+  aluno        Aluno           @relation(fields: [alunoId], references: [id], onDelete: Cascade)
+  modalidade   Modalidade
+  nome         String
+  data         DateTime
+  prioridade   ProvaPrioridade @default(C)
+  arquivada    Boolean         @default(false)
+  alvoTempo    String?         // "1:45:00" — override do detalhes.metaTempo pra UX cleaner
+  local        String?         // "Florianópolis, SC"
+  detalhes     Json            @db.JsonB
+  criadoEm     DateTime        @default(now())
+  atualizadoEm DateTime        @updatedAt
 
   @@index([alunoId, data])
+  // Dashboard query: "qual a Race A ativa do aluno?" precisa ser O(log n).
+  @@index([alunoId, prioridade, arquivada], map: "Prova_alunoId_prioridade_arquivada_idx")
+  // O partial unique index "prova_alvo_principal_ativo" é criado via raw
+  // SQL na migration — Prisma 5 não modela WHERE em @@unique nativamente.
 }
 
 // Modelo de RP "ativo": uma linha por combinação (alunoId, exercicio,
@@ -247,8 +452,12 @@ model RecordePessoal {
   // INSERT concorrente com mesma chave gera P2002 — capturado pelo
   // service e tratado como race recovery.
   // Postgres permite duplicatas com reps=NULL (NULL é distinto por
-  // default) — aceitável: modalidades sem reps têm exercicios únicos
-  // por distância, sem janela de race real.
+  // default) — pra resolver isso no caso de pace (endurance), o PR #19
+  // adicionou via raw SQL um UNIQUE PARCIAL `RecordePessoal_pace_unq`:
+  //   ON (alunoId, exercicio, metrica) WHERE reps IS NULL
+  // Prisma migrate ainda não emite o WHERE em unique nativo; o índice
+  // vive na migration `20260517190000_rp_pace_unique`. Service captura
+  // P2002 e aplica update lower-is-better via predicado `valor > novo`.
   @@unique([alunoId, exercicio, metrica, reps], name: "RecordePessoal_ativo_unq")
   @@index([alunoId, exercicio])
 }
@@ -268,7 +477,68 @@ model AtividadeStrava {
   payloadRaw   Json     @db.JsonB
   sincronizadoEm DateTime @default(now())
 
+  sugestoes    StravaSugestao[]
+
   @@index([alunoId, iniciadoEm])
+}
+
+// ──────────────────────────────────────────────────────────────
+// PR #41b — Motor de match Strava ↔ Treino prescrito.
+//
+// MatchRejeitado: registro de cooldown. Quando aluno rejeita uma sugestão
+// (ou Tier 1 é desfeito, ou match cai abaixo do threshold por estar bloqueado),
+// gravamos o par (treinoId, stravaActivityId) aqui. O motor consulta antes
+// de re-sugerir — evita "fica oferecendo a mesma sugestão indefinidamente".
+//
+// @@unique garante idempotência: re-processar mesmo webhook não duplica.
+// onDelete Cascade: aluno/treino some, cooldown some junto.
+// ──────────────────────────────────────────────────────────────
+model MatchRejeitado {
+  id               String   @id @default(cuid())
+  alunoId          String
+  treinoId         String
+  stravaActivityId String   // referência lógica (Strava id) — não FK forte
+  motivo           String   // 'manual_reject' | 'auto_below_threshold' | 'multi_match_veto' | 'brick_veto' | 'undone_tier1'
+  scoreNaRecusa    Float?
+  criadoEm         DateTime @default(now())
+
+  aluno  Aluno  @relation(fields: [alunoId], references: [id], onDelete: Cascade)
+  treino Treino @relation(fields: [treinoId], references: [id], onDelete: Cascade)
+
+  @@unique([treinoId, stravaActivityId])
+  @@index([alunoId, criadoEm])
+  @@index([stravaActivityId])
+}
+
+// StravaSugestao: Tier 2 retido aguardando opt-in manual do aluno.
+//
+// `score` é o resultado do calcularScore (0..1). `scoreBreakdown` é JSON do
+// objeto de pesos por eixo — usado pra explainability na UI ("matchou em
+// distância + tipo, divergiu em duração").
+//
+// status fluxo:
+//   PENDENTE → ACEITA (aluno aceita) | REJEITADA (aluno rejeita) | EXPIRADA (atividade deletada / treino removido)
+//
+// @@unique(atividadeStravaId): 1 atividade Strava → no máximo 1 sugestão ativa
+// por vez. Mais de um treino candidato vira escolha do aluno, não duas
+// sugestões paralelas.
+model StravaSugestao {
+  id                String   @id @default(cuid())
+  alunoId           String
+  treinoId          String
+  atividadeStravaId String   @unique
+  score             Float
+  scoreBreakdown    Json     @db.JsonB
+  status            String   @default("PENDENTE") // PENDENTE | ACEITA | REJEITADA | EXPIRADA
+  criadaEm          DateTime @default(now())
+  resolvidaEm       DateTime?
+
+  aluno     Aluno           @relation(fields: [alunoId], references: [id], onDelete: Cascade)
+  treino    Treino          @relation(fields: [treinoId], references: [id], onDelete: Cascade)
+  atividade AtividadeStrava @relation(fields: [atividadeStravaId], references: [id], onDelete: Cascade)
+
+  @@index([alunoId, status, criadaEm])
+  @@index([treinoId])
 }
 
 // ──────────────────────────────────────────────────────────────
@@ -287,9 +557,22 @@ model Exercicio {
   criadoEm        DateTime       @default(now())
   atualizadoEm    DateTime       @updatedAt
 
+  // PR #22 — domínio (musculação/BJJ/etc) + campos opcionais p/ BJJ.
+  // Default MUSCULACAO preserva o catálogo histórico sem backfill.
+  dominio         DominioExercicio @default(MUSCULACAO)
+  // Posição inicial / contexto do movimento. Texto livre porque BJJ
+  // tem nomenclatura regional (ex: "guarda fechada" vs "guarda
+  // borboleta" vs "100 quilos"). Cap em 80 no Zod.
+  posicao         String?
+  // Categoria do movimento — usado pelo picker da UI pra agrupar
+  // "Passagens", "Submissões", etc na visão do mestre.
+  tipoMovimento   TipoMovimento?
+
   rotinaExercicios RotinaExercicio[]
 
   @@index([grupoMuscular])
+  @@index([dominio])
+  @@index([dominio, tipoMovimento])
 }
 
 // ──────────────────────────────────────────────────────────────
@@ -391,4 +674,78 @@ model EvolucaoCorporal {
 
   @@index([alunoId, dataAvaliacao])
   @@index([avaliadorTipo])
+}
+
+// ──────────────────────────────────────────────────────────────
+// PlanoAlimentar — PR #18b (Sprint 6)
+//
+// Decisão de produto: NÃO modelamos refeições estruturadas. Nutris já
+// usam software dedicado (WebDiet/Dietbox) que exporta PDF. Esta tabela
+// só guarda referência ao PDF (via S3) + campo livre de "foco/metas".
+// Quando precisarmos de tracking estruturado (kcal, macros, refeições),
+// adicionamos um modelo separado sem migrar este.
+//
+// "ativo" é mantido pelo service via $transaction: criar novo plano
+// desativa todos os anteriores do mesmo aluno. Não usamos partial
+// unique index porque Postgres exige sintaxe que o Prisma migrate
+// engine ainda não emite sem fallback de raw SQL.
+// ──────────────────────────────────────────────────────────────
+model PlanoAlimentar {
+  id              String         @id @default(cuid())
+  alunoId         String
+  aluno           Aluno          @relation(fields: [alunoId], references: [id], onDelete: Cascade)
+  nutricionistaId String?
+  nutricionista   Nutricionista? @relation(fields: [nutricionistaId], references: [id], onDelete: SetNull)
+
+  // URL pública do PDF (S3 / CloudFront). Backend valida contra a
+  // allowlist `isAllowedAssetUrl` (PR #13, audit 2.23) no schema Zod.
+  pdfUrl          String
+  // Key S3 mantida pra DELETE/replace futuro sem precisar parsear a URL.
+  pdfKey          String?
+
+  // Texto livre de "Foco/Metas da Dieta" — input do nutri.
+  metasText       String?
+  // Default true; service desativa os antigos ao criar um novo.
+  ativo           Boolean        @default(true)
+
+  criadoEm        DateTime       @default(now())
+  atualizadoEm    DateTime       @updatedAt
+
+  // Query principal: "plano vigente do aluno" → filtra por (alunoId, ativo=true).
+  @@index([alunoId, ativo])
+}
+
+// ──────────────────────────────────────────────────────────────
+// PR #24 — Jornada do Faixa Preta (BJJ).
+//
+// Cada promoção é uma linha imutável (não atualizamos; corrigir =
+// criar nova linha + deletar anterior). Sequência cronológica permite
+// reconstruir a linha do tempo do atleta sem state mutável.
+//
+// `instrutorNome` é texto livre (não FK a Professor): cobre o caso
+// comum do atleta receber faixa de mestre externo à plataforma.
+//
+// Query principal "faixa atual" = LIMIT 1 ordenado por dataPromocao
+// DESC. Índice composto cobre a query sem table scan mesmo com
+// histórico longo.
+// ──────────────────────────────────────────────────────────────
+model EvolucaoMarcial {
+  id              String   @id @default(cuid())
+  alunoId         String
+  aluno           Aluno    @relation(fields: [alunoId], references: [id], onDelete: Cascade)
+
+  faixa           Faixa
+  // Grau (degrau/stripe na ponta da faixa): 0..4 antes da próxima
+  // graduação. Modelado como int simples — 5 é o salto de faixa.
+  grauNum         Int      @default(0)
+
+  dataPromocao    DateTime
+  instrutorNome   String?  // texto livre, max 120 no Zod
+  observacao      String?  // anotação opcional do mestre/atleta
+
+  criadoEm        DateTime @default(now())
+
+  // Query "faixa atual" filtra por alunoId e ordena por dataPromocao
+  // DESC com LIMIT 1. Índice composto cobre sem table scan.
+  @@index([alunoId, dataPromocao])
 }

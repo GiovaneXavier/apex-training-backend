@@ -1,5 +1,7 @@
 import { ZodError } from 'zod';
 
+import { captureUnexpectedError } from '../lib/sentry.js';
+
 export function errorHandler(err, req, res, next) {
   if (res.headersSent) return next(err);
 
@@ -10,7 +12,17 @@ export function errorHandler(err, req, res, next) {
   // HttpError (qualquer status, incluindo 5xx como 502 upstream) entrega
   // a mensagem real ao cliente — mensagens escritas por nós, sem stack leak.
   if (err instanceof HttpError) {
-    return res.status(err.status).json({ error: err.name || 'Error', message: err.message });
+    // PR #34 — reportar 5xx mesmo se for HttpError (504, 502 upstream).
+    // 4xx HttpError fica fora — rejeição esperada do app.
+    if (err.status >= 500) {
+      captureUnexpectedError(err, {
+        path: req?.path, method: req?.method, status: err.status,
+      });
+    }
+    // PR #37 — meta opcional propagado pro client (ex: 409 com alvo atual).
+    const body = { error: err.name || 'Error', message: err.message };
+    if (err.meta && typeof err.meta === 'object') Object.assign(body, err.meta);
+    return res.status(err.status).json(body);
   }
   // Compat: outros erros com .status (improvável após PR #5) tratados
   // se forem 4xx (mensagem aceita); 5xx vai pro genérico abaixo.
@@ -18,14 +30,22 @@ export function errorHandler(err, req, res, next) {
     return res.status(err.status).json({ error: err.name || 'Error', message: err.message });
   }
 
+  // PR #34 — 5xx genéricos (não-HttpError) sempre capturados. Inclui
+  // bugs reais: TypeError, ReferenceError, throws não-tratados.
   console.error('[unhandled]', err);
+  captureUnexpectedError(err, {
+    path: req?.path, method: req?.method, status: 500,
+  });
   res.status(500).json({ error: 'InternalServerError' });
 }
 
 export class HttpError extends Error {
-  constructor(status, message) {
+  constructor(status, message, meta) {
     super(message);
     this.status = status;
     this.name = 'HttpError';
+    // PR #37 — meta opcional (ex: { code, alvoAtual } no 409 de Race A).
+    // Compatível: chamadas existentes `new HttpError(status, msg)` não mudam.
+    if (meta) this.meta = meta;
   }
 }

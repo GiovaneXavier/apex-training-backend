@@ -1,10 +1,16 @@
 import { prisma } from '../lib/prisma.js';
 import { HttpError } from '../middleware/errorHandler.js';
 
-export async function listExercicios({ q, grupo, limit = 200 }) {
+// PR #22 — agora aceita filtros `dominio` e `tipoMovimento` pra que o
+// picker do RotinaForm consiga isolar a biblioteca BJJ da musculação.
+// Índice composto (dominio, tipoMovimento) na migration cobre os 2
+// filtros simultâneos sem table scan.
+export async function listExercicios({ q, grupo, dominio, tipoMovimento, limit = 200 }) {
   return prisma.exercicio.findMany({
     where: {
       ...(grupo ? { grupoMuscular: grupo } : {}),
+      ...(dominio ? { dominio } : {}),
+      ...(tipoMovimento ? { tipoMovimento } : {}),
       ...(q ? { nome: { contains: q, mode: 'insensitive' } } : {}),
     },
     orderBy: { nome: 'asc' },

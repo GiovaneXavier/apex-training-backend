@@ -1,11 +1,16 @@
 import { z } from 'zod';
 
+// PR #22 — Zod alinhado com o enum Prisma. HYROX existia no schema do
+// banco e nos detalhesHyrox mas faltava aqui (drift desde o PR #14).
+// Agora pareado: enum SQL e enum Zod 1:1.
 export const Modalidade = z.enum([
   'MUSCULACAO',
   'CORRIDA',
   'CICLISMO',
   'NATACAO',
   'TRIATHLON',
+  'HYROX',
+  'JIU_JITSU',
   'OUTRO',
 ]);
 
@@ -231,6 +236,44 @@ export const detalhesOutro = z.object({
   realizado: z.string().max(2000).nullable().optional(),
 });
 
+// ─────────────────────────────────────────────────────────────
+// JIU-JITSU (PR #23)
+//
+// Prescrição do BJJ: aquecimento livre, drills (referência a movimentos
+// do catálogo Exercicio via nome — Movimento ficou no Exercicio do PR #22),
+// rolas (rounds × tempo). O `realizado` fica do lado do execucao.schemas
+// (jiuJitsuRealizadoSchema) — espelha o pattern Corrida.
+// ─────────────────────────────────────────────────────────────
+const jiuJitsuAquecimentoSchema = z.object({
+  nome: z.string().min(1).max(120),
+  duracaoSeg: z.number().int().positive().max(3600).optional(),
+  observacao: z.string().max(300).optional(),
+});
+
+const jiuJitsuDrillSchema = z.object({
+  // `movimento` referencia Exercicio.nome (texto livre — snapshot do
+  // catálogo no momento da prescrição). Mesmo pattern do musculacao.
+  movimento: z.string().min(1).max(120),
+  reps: z.number().int().positive().max(200).optional(),
+  duracaoSeg: z.number().int().positive().max(3600).optional(),
+  observacao: z.string().max(300).optional(),
+});
+
+const jiuJitsuRolasSchema = z.object({
+  rounds: z.number().int().positive().max(50),
+  tempoRoundSeg: z.number().int().positive().max(1800), // 30min/round max
+  descansoSeg: z.number().int().nonnegative().max(600).optional(),
+  observacao: z.string().max(300).optional(),
+});
+
+export const detalhesJiuJitsu = z.object({
+  tipo: z.literal('jiu_jitsu'),
+  aquecimento: z.array(jiuJitsuAquecimentoSchema).max(10).optional(),
+  drills: z.array(jiuJitsuDrillSchema).max(20).optional(),
+  rolas: jiuJitsuRolasSchema.optional(),
+  observacao: z.string().max(500).optional(),
+});
+
 // Discriminated union — superpoder do JSON.
 export const treinoDetalhes = z.discriminatedUnion('tipo', [
   detalhesMusculacao,
@@ -239,6 +282,7 @@ export const treinoDetalhes = z.discriminatedUnion('tipo', [
   detalhesNatacao,
   detalhesTriathlon,
   detalhesHyrox,
+  detalhesJiuJitsu,
   detalhesOutro,
 ]);
 
@@ -277,4 +321,16 @@ export const listTreinosQuery = z.object({
   desde: z.string().datetime().optional(),
   ate: z.string().datetime().optional(),
   limit: z.coerce.number().int().min(1).max(200).default(50),
+});
+
+// PR #41c — ACK de auto-match Tier 1.
+// Frontend bate este endpoint após exibir o toast "X autopreenchidos —
+// Desfazer", batch de IDs vistos. Limite de 50 evita payload abusivo
+// (cardinalidade real é ~1-5 em fluxo normal). Cada id é validado por
+// formato (cuid-ish, 24 chars min, alphanum) — defesa rasa mas barata.
+export const ackAutoMatchSchema = z.object({
+  ids: z
+    .array(z.string().min(1).max(64))
+    .min(1, 'pelo menos 1 id')
+    .max(50, 'máx 50 ids por batch'),
 });

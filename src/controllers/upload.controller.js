@@ -4,38 +4,62 @@ import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { HttpError } from '../middleware/errorHandler.js';
 
-// Tipos MIME que aceitamos para fotos de evolução. Whitelist explícita —
-// nunca confiar no Content-Type vindo do cliente sem validar antes de assinar.
-const ALLOWED_MIME = new Set([
-  'image/jpeg',
-  'image/png',
-  'image/webp',
-  'image/heic',
-]);
+// PR #18b — allowlist agora é POR KIND. Cada categoria tem MIME e cap
+// próprios: imagens são limitadas a 8MB porque JPEG/WebP modernos cabem
+// nisso. PDFs de plano alimentar geram-se com 1-5MB tipicamente
+// (algumas páginas com imagens) mas podem chegar a 15MB em planos
+// complexos — cap em 15MB. Acoplado ao guard SSE assinado (PR #13),
+// não há vetor pra subir um arquivo de 10GB mesmo que o cliente minta.
+const KIND_RULES = {
+  evolucao: {
+    mimes: ['image/jpeg', 'image/png', 'image/webp', 'image/heic'],
+    maxBytes: 8 * 1024 * 1024,
+    label: 'imagem',
+  },
+  avatar: {
+    mimes: ['image/jpeg', 'image/png', 'image/webp', 'image/heic'],
+    maxBytes: 8 * 1024 * 1024,
+    label: 'imagem',
+  },
+  'plano-alimentar': {
+    mimes: ['application/pdf'],
+    maxBytes: 15 * 1024 * 1024,
+    label: 'PDF',
+  },
+};
 
 const MIME_TO_EXT = {
   'image/jpeg': 'jpg',
   'image/png': 'png',
   'image/webp': 'webp',
   'image/heic': 'heic',
+  'application/pdf': 'pdf',
 };
 
-// 8 MB cobre fotos de evolução com folga (smartphones modernos geram
-// JPEGs de 2-5 MB). Cap maior abre porta pra storage abuse — atacante
-// que escape o Zod cliente ainda esbarra na assinatura S3 (ver abaixo).
-const MAX_BYTES = 8 * 1024 * 1024;
-
-const presignQuerySchema = z.object({
-  contentType: z.string().refine((v) => ALLOWED_MIME.has(v), {
-    message: 'Tipo de imagem não suportado (use JPEG, PNG, WebP ou HEIC).',
-  }),
-  contentLength: z.coerce.number().int().positive().max(MAX_BYTES, {
-    message: `Arquivo excede o limite de ${MAX_BYTES} bytes.`,
-  }),
-  // Categoria do upload — hoje só evolução, mas o key prefix é parametrizável
-  // pra suportar avatar/anexos sem refazer a rota.
-  kind: z.enum(['evolucao', 'avatar']).default('evolucao'),
-});
+const presignQuerySchema = z
+  .object({
+    contentType: z.string(),
+    contentLength: z.coerce.number().int().positive(),
+    kind: z.enum(['evolucao', 'avatar', 'plano-alimentar']).default('evolucao'),
+  })
+  .superRefine((v, ctx) => {
+    const rule = KIND_RULES[v.kind];
+    if (!rule) return; // nunca acontece, o enum acima trava
+    if (!rule.mimes.includes(v.contentType)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['contentType'],
+        message: `Tipo de ${rule.label} não suportado para "${v.kind}" (esperado: ${rule.mimes.join(', ')}).`,
+      });
+    }
+    if (v.contentLength > rule.maxBytes) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['contentLength'],
+        message: `Arquivo excede o limite de ${rule.maxBytes} bytes para "${v.kind}".`,
+      });
+    }
+  });
 
 let cachedClient = null;
 function getS3Client() {
