@@ -233,6 +233,10 @@ async function detalheAluno(userId) {
   const vp = aluno.vinculosProf[0]?.professor;
   const vn = aluno.vinculosNutri[0]?.nutricionista;
   return {
+    // PR #44 — Bloco C exige Aluno.id (não User.id) pra chamar
+    // PUT /admin/alunos/:alunoId/vinculo-professor. Expor aqui evita
+    // round-trip extra no frontend.
+    alunoId: aluno.id,
     vinculoProfessor: vp ? { id: vp.id, nome: vp.user.nome } : null,
     vinculoNutri: vn ? { id: vn.id, nome: vn.user.nome } : null,
     treinosCount,

@@ -482,6 +482,8 @@ describe('obterDetalheUsuario — variant por role', () => {
     assert.equal(out.user.role, 'ALUNO');
     assert.ok('treinosCount' in out.detalhe || out.detalhe.treinosCount === 0,
       'detalhe ALUNO deve incluir treinosCount');
+    // PR #44 — alunoId no payload pra Bloco C consumir sem round-trip
+    assert.equal(out.detalhe.alunoId, 'a1', 'detalhe ALUNO deve incluir alunoId (Aluno.id)');
   });
 
   it('PROFESSOR → alunosCount + treinosPrescritosCount + alunosTop5', async () => {
