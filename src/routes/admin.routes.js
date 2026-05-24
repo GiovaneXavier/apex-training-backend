@@ -7,6 +7,9 @@ import {
   aprovarUsuarioCtrl,
   atualizarStatusCtrl,
   detalheUsuarioCtrl,
+  substituirVinculoCtrl,
+  removerVinculoCtrl,
+  listProfessoresAtivosCtrl,
 } from '../controllers/admin.controller.js';
 
 const router = Router();
@@ -22,5 +25,12 @@ router.get('/users', listUsuarios);
 router.get('/users/:id', detalheUsuarioCtrl);
 router.patch('/users/:id/aprovar', aprovarUsuarioCtrl);
 router.patch('/users/:id/status', atualizarStatusCtrl);
+
+// PR #44 — Bloco C: Overrides de vínculo.
+// Rotas estáticas (/professores/ativos) antes de paramétricas
+// (/alunos/:alunoId/...) seguindo padrão do projeto.
+router.get('/professores/ativos', listProfessoresAtivosCtrl);
+router.put('/alunos/:alunoId/vinculo-professor', substituirVinculoCtrl);
+router.delete('/alunos/:alunoId/vinculo-professor', removerVinculoCtrl);
 
 export default router;

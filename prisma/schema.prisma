@@ -136,6 +136,8 @@ model User {
   professor     Professor?
   nutricionista Nutricionista?
   pushSubscriptions PushSubscription[]
+  // PR #44 — auditoria de overrides de vínculo (admin operacional).
+  vinculoAuditLogs  VinculoAuditLog[] @relation("VinculoAuditLogAtor")
 
   @@index([role])
   @@index([ativo])
@@ -304,6 +306,34 @@ model VinculoProfessor {
   criadoEm    DateTime  @default(now())
 
   @@unique([alunoId, professorId])
+}
+
+// PR #44 (Sprint 16 — Bloco C) — Audit log de overrides de vínculo.
+//
+// Registra TODAS as ações administrativas em VinculoProfessor (criar/
+// quebrar via /api/admin/alunos/:id/vinculo-professor). Tabela
+// intencionalmente desnormalizada (FK só pro ator; alunoId/professorId
+// soltos como string) pra preservar rastro mesmo quando Aluno ou
+// Professor for deletado em cascata.
+//
+// Fundação do Bloco D (Auditoria geral): quando ele entrar, este model
+// pode ser absorvido por um AuditLog genérico via view ou migração.
+//
+// `acao` é string livre (não enum) pra evitar migration toda vez que
+// surgir nova ação auditada. Valores conhecidos hoje:
+//   "criar_prof"   — vínculo aluno↔professor criado via override admin
+//   "quebrar_prof" — vínculo quebrado via override admin
+model VinculoAuditLog {
+  id          String   @id @default(cuid())
+  acao        String
+  alunoId     String
+  professorId String?
+  motivo      String?
+  atorUserId  String
+  ator        User     @relation("VinculoAuditLogAtor", fields: [atorUserId], references: [id])
+  criadoEm    DateTime @default(now())
+
+  @@index([alunoId, criadoEm])
 }
 
 model VinculoNutricionista {

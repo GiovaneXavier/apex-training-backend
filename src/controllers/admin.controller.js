@@ -13,9 +13,18 @@ import {
   obterDetalheUsuario,
 } from '../services/adminUsers.service.js';
 import {
+  substituirVinculoProfessor,
+  removerVinculoProfessor,
+} from '../services/vinculoOverride.service.js';
+import { listarProfessoresAtivos } from '../services/adminProfessores.service.js';
+import {
   listUsersQuery,
   userIdParam,
   updateStatusBody,
+  alunoIdParam,
+  substituirVinculoBody,
+  removerVinculoBody,
+  listProfessoresQuery,
 } from '../schemas/admin.schemas.js';
 import { HttpError } from '../middleware/errorHandler.js';
 
@@ -82,6 +91,54 @@ export async function detalheUsuarioCtrl(req, res, next) {
     ensureAdmin(req);
     const { id } = userIdParam.parse(req.params);
     const data = await obterDetalheUsuario({ id });
+    res.json(data);
+  } catch (err) {
+    next(err);
+  }
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// PR #44 — Bloco C: Overrides de vínculo Aluno↔Professor
+// ──────────────────────────────────────────────────────────────────────
+
+export async function substituirVinculoCtrl(req, res, next) {
+  try {
+    ensureAdmin(req);
+    const { alunoId } = alunoIdParam.parse(req.params);
+    const { professorId, motivo } = substituirVinculoBody.parse(req.body);
+    const data = await substituirVinculoProfessor({
+      alunoId,
+      professorId,
+      motivo,
+      atorUserId: req.user.userId,
+    });
+    res.json(data);
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function removerVinculoCtrl(req, res, next) {
+  try {
+    ensureAdmin(req);
+    const { alunoId } = alunoIdParam.parse(req.params);
+    const { motivo } = removerVinculoBody.parse(req.body ?? {});
+    const data = await removerVinculoProfessor({
+      alunoId,
+      motivo,
+      atorUserId: req.user.userId,
+    });
+    res.json(data);
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function listProfessoresAtivosCtrl(req, res, next) {
+  try {
+    ensureAdmin(req);
+    const filters = listProfessoresQuery.parse(req.query);
+    const data = await listarProfessoresAtivos(filters);
     res.json(data);
   } catch (err) {
     next(err);
