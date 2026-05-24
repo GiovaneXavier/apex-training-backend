@@ -6,6 +6,17 @@
 // reescrever a semântica do middleware.
 
 import { obterMetricasGlobais } from '../services/adminMetrics.service.js';
+import {
+  listarUsuarios,
+  aprovarUsuario,
+  atualizarStatusUsuario,
+  obterDetalheUsuario,
+} from '../services/adminUsers.service.js';
+import {
+  listUsersQuery,
+  userIdParam,
+  updateStatusBody,
+} from '../schemas/admin.schemas.js';
 import { HttpError } from '../middleware/errorHandler.js';
 
 function ensureAdmin(req) {
@@ -18,6 +29,59 @@ export async function metricasGlobais(req, res, next) {
   try {
     ensureAdmin(req);
     const data = await obterMetricasGlobais();
+    res.json(data);
+  } catch (err) {
+    next(err);
+  }
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// PR #43 — Bloco B: Gerenciamento de Usuários
+// ──────────────────────────────────────────────────────────────────────
+
+export async function listUsuarios(req, res, next) {
+  try {
+    ensureAdmin(req);
+    const filters = listUsersQuery.parse(req.query);
+    const data = await listarUsuarios(filters);
+    res.json(data);
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function aprovarUsuarioCtrl(req, res, next) {
+  try {
+    ensureAdmin(req);
+    const { id } = userIdParam.parse(req.params);
+    const data = await aprovarUsuario({ id });
+    res.json(data);
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function atualizarStatusCtrl(req, res, next) {
+  try {
+    ensureAdmin(req);
+    const { id } = userIdParam.parse(req.params);
+    const { ativo } = updateStatusBody.parse(req.body);
+    const data = await atualizarStatusUsuario({
+      id,
+      ativo,
+      atorUserId: req.user.userId,
+    });
+    res.json(data);
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function detalheUsuarioCtrl(req, res, next) {
+  try {
+    ensureAdmin(req);
+    const { id } = userIdParam.parse(req.params);
+    const data = await obterDetalheUsuario({ id });
     res.json(data);
   } catch (err) {
     next(err);
