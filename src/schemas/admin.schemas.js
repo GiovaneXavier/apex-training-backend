@@ -38,3 +38,28 @@ export const userIdParam = z.object({
 export const updateStatusBody = z.object({
   ativo: z.boolean(),
 });
+
+// PR #44 — Bloco C: Overrides de vínculo
+// ──────────────────────────────────────────────────────────────────────
+
+export const alunoIdParam = z.object({
+  alunoId: z.string().min(1).max(64),
+});
+
+// PUT substitui o vínculo. `motivo` é opcional (D7) mas validado se
+// vier — string longa demais pode poluir o audit. 500 chars cobre
+// "Professor X saiu da plataforma em 24/05, aluno migrou pra Y após
+// orientação do head coach. Confirmado por email."
+export const substituirVinculoBody = z.object({
+  professorId: z.string().min(1).max(64),
+  motivo: z.string().trim().min(1).max(500).optional(),
+});
+
+export const removerVinculoBody = z.object({
+  motivo: z.string().trim().min(1).max(500).optional(),
+});
+
+export const listProfessoresQuery = z.object({
+  search: z.string().trim().min(1).max(120).optional(),
+  limit: z.coerce.number().int().min(1).max(50).default(20),
+});
