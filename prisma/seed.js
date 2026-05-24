@@ -44,8 +44,13 @@ async function upsertUser({ email, senha, nome, role, extra = {} }) {
 async function main() {
   console.log('Seeding…');
 
+  // PR #41c-hotfix — email reservado: admin@apex.com agora é EXCLUSIVO
+  // do seed-admin.js (role=ADMIN). Este professor de teste usa
+  // professor@apex.com pra evitar colisão entre seed.js (dev) e
+  // seed-admin.js (operações). Mantém senha admin123 pra preservar
+  // hábito de QA.
   const profUser = await upsertUser({
-    email: 'admin@apex.com', senha: 'admin123', nome: 'Admin Professor',
+    email: 'professor@apex.com', senha: 'admin123', nome: 'Professor Head',
     role: 'PROFESSOR', extra: { bio: 'Treinador head' },
   });
   const nutriUser = await upsertUser({
@@ -388,8 +393,9 @@ async function main() {
 
   console.log('Seed OK.');
   console.log('Logins:');
-  console.log('  PROFESSOR     admin@apex.com / admin123');
+  console.log('  PROFESSOR     professor@apex.com / admin123');
   console.log('  NUTRICIONISTA nutri@apex.com / nutri123');
+  console.log('  (ADMIN admin@apex.com é gerenciado por `npm run seed:admin`)');
   console.log('  ALUNO         aluno@apex.com / aluno123  (foco: musculação)');
   console.log('  ALUNO         maria@apex.com / maria123  (foco: corrida)');
   console.log('  ALUNO         pedro@apex.com / pedro123  (foco: triathlon)');
