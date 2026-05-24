@@ -34,6 +34,7 @@ import marcialRoutes from './routes/marcial.routes.js';
 import voiceRoutes from './routes/voice.routes.js';
 import pushRoutes from './routes/push.routes.js';
 import coachBriefingRoutes from './routes/coachBriefing.routes.js';
+import adminRoutes from './routes/admin.routes.js';
 import { errorHandler } from './middleware/errorHandler.js';
 
 const app = express();
@@ -114,6 +115,7 @@ app.use('/api/marcial', marcialRoutes);
 app.use('/api/voice', voiceRoutes);
 app.use('/api/push', pushRoutes);
 app.use('/api/coach', coachBriefingRoutes);
+app.use('/api/admin', adminRoutes);
 
 app.use((req, res) => res.status(404).json({ error: 'NotFound', path: req.path }));
 app.use(errorHandler);
