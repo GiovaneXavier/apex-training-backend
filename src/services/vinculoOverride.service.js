@@ -1,29 +1,22 @@
 // PR #44 (Sprint 16 — Bloco C) — Overrides de vínculo Aluno↔Professor.
+// PR #45 (Sprint 16 — Bloco D) — Migrado pra usar logAudit() unificado
+// (substitui prisma.vinculoAuditLog.create*). VinculoAuditLog foi
+// absorvido em AuditLog na migration 20260527_audit_log_unificado.
 //
-// Operações administrativas de exceção (troca de coach, professor que
-// sai da plataforma, aluno órfão). Atomicamente substitui ou remove
-// vínculos, gravando rastro em VinculoAuditLog.
-//
-// Decisões batidas no briefing:
-//   D2 — "trocar" = substituir todos (1:1 implícito): PUT é idempotente
-//        e atomicamente quebra os antigos + cria o novo
-//   D3 — motivo persistido em VinculoAuditLog (mini-audit dedicado,
-//        fundação do Bloco D)
-//   D4 — hard delete do VinculoProfessor (rastro fica no audit log)
-//   D7 — motivo opcional (não bloqueia ação rápida)
-//
-// Idempotência: chamar PUT com mesmo professorId N vezes resulta no
-// mesmo estado final (vínculo único entre aluno e prof). Segunda
-// chamada não duplica nem registra audit log redundante.
+// Mudança chave de comportamento: audit é gravado APÓS o commit da
+// transação (fire-and-forget). Antes era dentro do tx.vinculoAuditLog
+// — agora se a transação falhar, NADA é logado (consistência: só
+// auditamos fatos consumados, não intenções revertidas).
 
 import { prisma } from '../lib/prisma.js';
 import { HttpError } from '../middleware/errorHandler.js';
+import { logAudit, AUDIT_ACTIONS } from '../lib/auditLog.js';
 
 // ──────────────────────────────────────────────────────────────────────
 // substituirVinculoProfessor — operação principal (PUT)
 // ──────────────────────────────────────────────────────────────────────
 
-export async function substituirVinculoProfessor({ alunoId, professorId, motivo, atorUserId }) {
+export async function substituirVinculoProfessor({ alunoId, professorId, motivo, atorUserId, requestMeta }) {
   // Guard 1: aluno existe e está ativo.
   const aluno = await prisma.aluno.findUnique({
     where: { id: alunoId },
@@ -81,16 +74,6 @@ export async function substituirVinculoProfessor({ alunoId, professorId, motivo,
       await tx.vinculoProfessor.deleteMany({
         where: { id: { in: idsAQuebrar } },
       });
-      // Audit "quebrar_prof" — 1 entry por vínculo removido.
-      await tx.vinculoAuditLog.createMany({
-        data: existentes.map((v) => ({
-          acao: 'quebrar_prof',
-          alunoId,
-          professorId: v.professorId,
-          motivo: motivo ?? null,
-          atorUserId,
-        })),
-      });
     }
 
     // 2. Criar o novo vínculo.
@@ -98,17 +81,31 @@ export async function substituirVinculoProfessor({ alunoId, professorId, motivo,
       data: { alunoId, professorId },
       select: { id: true, alunoId: true, professorId: true, criadoEm: true },
     });
-    await tx.vinculoAuditLog.create({
-      data: {
-        acao: 'criar_prof',
-        alunoId,
-        professorId,
-        motivo: motivo ?? null,
-        atorUserId,
-      },
-    });
 
-    return { novo, removidos: idsAQuebrar.length };
+    return { novo, removidos: idsAQuebrar.length, removidosDados: existentes };
+  });
+
+  // PR #45 — audit DEPOIS do commit (fire-and-forget). Se a transação
+  // falhar, nada é logado. Se logAudit falhar, transação já commitou.
+  for (const v of result.removidosDados) {
+    logAudit({
+      action: AUDIT_ACTIONS.VINCULO_QUEBRAR_PROF,
+      entityType: 'Aluno',
+      entityId: alunoId,
+      payload: { professorId: v.professorId, motivo: motivo ?? null },
+      atorUserId,
+      ip: requestMeta?.ip,
+      userAgent: requestMeta?.userAgent,
+    });
+  }
+  logAudit({
+    action: AUDIT_ACTIONS.VINCULO_CRIAR_PROF,
+    entityType: 'Aluno',
+    entityId: alunoId,
+    payload: { professorId, motivo: motivo ?? null },
+    atorUserId,
+    ip: requestMeta?.ip,
+    userAgent: requestMeta?.userAgent,
   });
 
   return {
@@ -123,7 +120,7 @@ export async function substituirVinculoProfessor({ alunoId, professorId, motivo,
 // removerVinculoProfessor — DELETE quebra TODOS sem substituir
 // ──────────────────────────────────────────────────────────────────────
 
-export async function removerVinculoProfessor({ alunoId, motivo, atorUserId }) {
+export async function removerVinculoProfessor({ alunoId, motivo, atorUserId, requestMeta }) {
   const aluno = await prisma.aluno.findUnique({
     where: { id: alunoId },
     select: { id: true },
@@ -140,20 +137,22 @@ export async function removerVinculoProfessor({ alunoId, motivo, atorUserId }) {
     return { success: true, noop: true, removidos: 0 };
   }
 
-  await prisma.$transaction(async (tx) => {
-    await tx.vinculoProfessor.deleteMany({
-      where: { alunoId },
-    });
-    await tx.vinculoAuditLog.createMany({
-      data: existentes.map((v) => ({
-        acao: 'quebrar_prof',
-        alunoId,
-        professorId: v.professorId,
-        motivo: motivo ?? null,
-        atorUserId,
-      })),
-    });
+  await prisma.vinculoProfessor.deleteMany({
+    where: { alunoId },
   });
+
+  // PR #45 — audit pós-delete (fire-and-forget). 1 entry por vínculo.
+  for (const v of existentes) {
+    logAudit({
+      action: AUDIT_ACTIONS.VINCULO_QUEBRAR_PROF,
+      entityType: 'Aluno',
+      entityId: alunoId,
+      payload: { professorId: v.professorId, motivo: motivo ?? null },
+      atorUserId,
+      ip: requestMeta?.ip,
+      userAgent: requestMeta?.userAgent,
+    });
+  }
 
   return { success: true, noop: false, removidos: existentes.length };
 }

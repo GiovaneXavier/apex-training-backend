@@ -17,6 +17,7 @@ import {
   removerVinculoProfessor,
 } from '../services/vinculoOverride.service.js';
 import { listarProfessoresAtivos } from '../services/adminProfessores.service.js';
+import { listarAuditLogs } from '../services/auditLog.service.js';
 import {
   listUsersQuery,
   userIdParam,
@@ -25,6 +26,7 @@ import {
   substituirVinculoBody,
   removerVinculoBody,
   listProfessoresQuery,
+  listAuditQuery,
 } from '../schemas/admin.schemas.js';
 import { HttpError } from '../middleware/errorHandler.js';
 
@@ -63,7 +65,11 @@ export async function aprovarUsuarioCtrl(req, res, next) {
   try {
     ensureAdmin(req);
     const { id } = userIdParam.parse(req.params);
-    const data = await aprovarUsuario({ id });
+    const data = await aprovarUsuario({
+      id,
+      atorUserId: req.user.userId,
+      requestMeta: requestMeta(req),
+    });
     res.json(data);
   } catch (err) {
     next(err);
@@ -79,6 +85,7 @@ export async function atualizarStatusCtrl(req, res, next) {
       id,
       ativo,
       atorUserId: req.user.userId,
+      requestMeta: requestMeta(req),
     });
     res.json(data);
   } catch (err) {
@@ -101,6 +108,12 @@ export async function detalheUsuarioCtrl(req, res, next) {
 // PR #44 — Bloco C: Overrides de vínculo Aluno↔Professor
 // ──────────────────────────────────────────────────────────────────────
 
+// Helper inline pra montar requestMeta (PR #45). Captura ip/userAgent
+// pra audit log forense — sem isso, logs de override perdem origem.
+function requestMeta(req) {
+  return { ip: req.ip, userAgent: req.get('user-agent') };
+}
+
 export async function substituirVinculoCtrl(req, res, next) {
   try {
     ensureAdmin(req);
@@ -111,6 +124,7 @@ export async function substituirVinculoCtrl(req, res, next) {
       professorId,
       motivo,
       atorUserId: req.user.userId,
+      requestMeta: requestMeta(req),
     });
     res.json(data);
   } catch (err) {
@@ -127,6 +141,7 @@ export async function removerVinculoCtrl(req, res, next) {
       alunoId,
       motivo,
       atorUserId: req.user.userId,
+      requestMeta: requestMeta(req),
     });
     res.json(data);
   } catch (err) {
@@ -139,6 +154,19 @@ export async function listProfessoresAtivosCtrl(req, res, next) {
     ensureAdmin(req);
     const filters = listProfessoresQuery.parse(req.query);
     const data = await listarProfessoresAtivos(filters);
+    res.json(data);
+  } catch (err) {
+    next(err);
+  }
+}
+
+// PR #45 — Bloco D: Audit log viewer (read-only).
+// Append-only é sagrado — não há controllers de create/update/delete.
+export async function listAuditLogsCtrl(req, res, next) {
+  try {
+    ensureAdmin(req);
+    const filters = listAuditQuery.parse(req.query);
+    const data = await listarAuditLogs(filters);
     res.json(data);
   } catch (err) {
     next(err);
