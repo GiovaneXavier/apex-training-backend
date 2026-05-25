@@ -136,8 +136,9 @@ model User {
   professor     Professor?
   nutricionista Nutricionista?
   pushSubscriptions PushSubscription[]
-  // PR #44 — auditoria de overrides de vínculo (admin operacional).
-  vinculoAuditLogs  VinculoAuditLog[] @relation("VinculoAuditLogAtor")
+  // PR #45 — Audit log unificado (substitui VinculoAuditLog do PR #44
+  // via migration de absorção).
+  auditLogs     AuditLog[] @relation("AuditLogAtor")
 
   @@index([role])
   @@index([ativo])
@@ -308,32 +309,42 @@ model VinculoProfessor {
   @@unique([alunoId, professorId])
 }
 
-// PR #44 (Sprint 16 — Bloco C) — Audit log de overrides de vínculo.
+// PR #45 (Sprint 16 — Bloco D) — Audit log unificado.
 //
-// Registra TODAS as ações administrativas em VinculoProfessor (criar/
-// quebrar via /api/admin/alunos/:id/vinculo-professor). Tabela
-// intencionalmente desnormalizada (FK só pro ator; alunoId/professorId
-// soltos como string) pra preservar rastro mesmo quando Aluno ou
-// Professor for deletado em cascata.
+// Substitui VinculoAuditLog (PR #44) via migration de absorção:
+// dados antigos viram action='vinculo.criar_prof'/'vinculo.quebrar_prof'
+// com entityType='Aluno' e payload jsonb_build_object(...).
 //
-// Fundação do Bloco D (Auditoria geral): quando ele entrar, este model
-// pode ser absorvido por um AuditLog genérico via view ou migração.
+// Tabela polimórfica: cobre overrides de vínculo, mutações de user
+// (aprovar/ativar/desativar) e auth (login/login_falhou/logout).
+// Novos eventos não exigem migration — basta novo `action` no código
+// (lista canônica em src/lib/auditLog.js).
 //
-// `acao` é string livre (não enum) pra evitar migration toda vez que
-// surgir nova ação auditada. Valores conhecidos hoje:
-//   "criar_prof"   — vínculo aluno↔professor criado via override admin
-//   "quebrar_prof" — vínculo quebrado via override admin
-model VinculoAuditLog {
+// Desnormalização proposital:
+//   - entityType/entityId como string solta (sem FK) → sobrevive a
+//     cascade do Aluno/User/Treino. Audit trail tem que ser eterno.
+//   - payload como Json → flexibilidade sem schema migration por evento.
+//   - FK só pro ator (mantém integridade do "quem fez") com ON DELETE
+//     Restrict — usuário com audit log não pode ser deletado.
+//
+// 4 índices cobrem todos os filtros previstos do viewer (cronológico
+// global, por ator, polimórfico por entidade, por action).
+model AuditLog {
   id          String   @id @default(cuid())
-  acao        String
-  alunoId     String
-  professorId String?
-  motivo      String?
+  action      String
+  entityType  String
+  entityId    String
+  payload     Json?
   atorUserId  String
-  ator        User     @relation("VinculoAuditLogAtor", fields: [atorUserId], references: [id])
+  ator        User     @relation("AuditLogAtor", fields: [atorUserId], references: [id], onDelete: Restrict)
+  ip          String?
+  userAgent   String?
   criadoEm    DateTime @default(now())
 
-  @@index([alunoId, criadoEm])
+  @@index([criadoEm])
+  @@index([atorUserId, criadoEm])
+  @@index([entityType, entityId, criadoEm])
+  @@index([action, criadoEm])
 }
 
 model VinculoNutricionista {

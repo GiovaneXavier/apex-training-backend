@@ -16,6 +16,7 @@
 import { prisma } from '../lib/prisma.js';
 import { HttpError } from '../middleware/errorHandler.js';
 import { encodeCursor, decodeCursor } from '../lib/cursor.js';
+import { logAudit, AUDIT_ACTIONS } from '../lib/auditLog.js';
 
 // ──────────────────────────────────────────────────────────────────────
 // listarUsuarios — paginação cursor-based + filtros
@@ -91,7 +92,7 @@ export async function listarUsuarios({ limit, cursor, search, role, ativo }) {
 // aprovarUsuario — destrava PROFESSOR/NUTRI pendente
 // ──────────────────────────────────────────────────────────────────────
 
-export async function aprovarUsuario({ id }) {
+export async function aprovarUsuario({ id, atorUserId, requestMeta }) {
   const user = await prisma.user.findUnique({
     where: { id },
     select: USER_LIST_SELECT,
@@ -115,6 +116,20 @@ export async function aprovarUsuario({ id }) {
     select: USER_LIST_SELECT,
   });
 
+  // PR #45 — audit pós-commit (fire-and-forget). Ignora se atorUserId
+  // não foi passado (retrocompat — controllers antigos sem refactor).
+  if (atorUserId) {
+    logAudit({
+      action: AUDIT_ACTIONS.USER_APROVAR,
+      entityType: 'User',
+      entityId: id,
+      payload: { roleAlvo: user.role, emailAlvo: user.email },
+      atorUserId,
+      ip: requestMeta?.ip,
+      userAgent: requestMeta?.userAgent,
+    });
+  }
+
   return { success: true, user: atualizado };
 }
 
@@ -122,7 +137,7 @@ export async function aprovarUsuario({ id }) {
 // atualizarStatus — toggle genérico com guards
 // ──────────────────────────────────────────────────────────────────────
 
-export async function atualizarStatusUsuario({ id, ativo, atorUserId }) {
+export async function atualizarStatusUsuario({ id, ativo, atorUserId, requestMeta }) {
   // Guard 1 (D3) — auto-desativar bloqueia. Vale só pra desativação;
   // ativar a si mesmo é no-op operacional irrelevante mas inofensivo.
   if (ativo === false && id === atorUserId) {
@@ -152,6 +167,19 @@ export async function atualizarStatusUsuario({ id, ativo, atorUserId }) {
     data: { ativo },
     select: USER_LIST_SELECT,
   });
+
+  // PR #45 — audit pós-commit. Diferencia activate vs deactivate.
+  if (atorUserId) {
+    logAudit({
+      action: ativo ? AUDIT_ACTIONS.USER_ATIVAR : AUDIT_ACTIONS.USER_DESATIVAR,
+      entityType: 'User',
+      entityId: id,
+      payload: { roleAlvo: atualizado.role, emailAlvo: atualizado.email },
+      atorUserId,
+      ip: requestMeta?.ip,
+      userAgent: requestMeta?.userAgent,
+    });
+  }
 
   return { success: true, user: atualizado, noop: false };
 }

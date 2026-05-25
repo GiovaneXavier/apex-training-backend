@@ -13,6 +13,7 @@ const state = {
   vinculosNutri: [], // { alunoId, nutricionistaId, aceitoPeloAluno, criadoEm }
   lastWhere: null, // pra inspeção
   lastUpdateData: null,
+  auditLogs: [], // PR #45 — capturado via mock do logAudit
 };
 
 function resetState() {
@@ -25,7 +26,26 @@ function resetState() {
   state.vinculosNutri = [];
   state.lastWhere = null;
   state.lastUpdateData = null;
+  state.auditLogs = [];
 }
+
+// PR #45 — mock do helper de audit. Captura sync sem depender de Prisma.
+mock.module('../lib/auditLog.js', {
+  namedExports: {
+    AUDIT_ACTIONS: {
+      VINCULO_CRIAR_PROF: 'vinculo.criar_prof',
+      VINCULO_QUEBRAR_PROF: 'vinculo.quebrar_prof',
+      USER_APROVAR: 'user.aprovar',
+      USER_ATIVAR: 'user.ativar',
+      USER_DESATIVAR: 'user.desativar',
+      AUTH_LOGIN: 'auth.login',
+      AUTH_LOGIN_FALHOU: 'auth.login_falhou',
+      AUTH_LOGOUT: 'auth.logout',
+    },
+    logAudit: (entry) => { state.auditLogs.push(entry); },
+    logAuditAndWait: async (entry) => { state.auditLogs.push(entry); return entry; },
+  },
+});
 
 // Mock prisma — implementação mínima que cobre o que o service usa.
 mock.module('../lib/prisma.js', {
@@ -373,6 +393,27 @@ describe('aprovarUsuario — D2 fail-fast', () => {
     );
   });
 
+  it('PR #45 — aprovar emite audit user.aprovar quando atorUserId passado', async () => {
+    pushUser({ id: 'u_prof', role: 'PROFESSOR', ativo: false });
+    await svc.aprovarUsuario({
+      id: 'u_prof', atorUserId: 'admin1',
+      requestMeta: { ip: '10.0.0.1', userAgent: 'curl/8' },
+    });
+    assert.equal(state.auditLogs.length, 1);
+    assert.equal(state.auditLogs[0].action, 'user.aprovar');
+    assert.equal(state.auditLogs[0].entityType, 'User');
+    assert.equal(state.auditLogs[0].entityId, 'u_prof');
+    assert.equal(state.auditLogs[0].payload.roleAlvo, 'PROFESSOR');
+    assert.equal(state.auditLogs[0].atorUserId, 'admin1');
+    assert.equal(state.auditLogs[0].ip, '10.0.0.1');
+  });
+
+  it('PR #45 — aprovar sem atorUserId NÃO emite audit (retrocompat)', async () => {
+    pushUser({ id: 'u_prof', role: 'PROFESSOR', ativo: false });
+    await svc.aprovarUsuario({ id: 'u_prof' });
+    assert.equal(state.auditLogs.length, 0);
+  });
+
   it('não encontrado → 404', async () => {
     await assert.rejects(
       svc.aprovarUsuario({ id: 'inexistente' }),
@@ -424,7 +465,7 @@ describe('atualizarStatusUsuario — D3 guards', () => {
     assert.equal(out.user.ativo, true);
   });
 
-  it('desativar PROFESSOR ativo → 200 + persiste', async () => {
+  it('desativar PROFESSOR ativo → 200 + persiste + audit user.desativar', async () => {
     pushUser({ id: 'u_self', role: 'ADMIN', ativo: true });
     pushUser({ id: 'u_prof', role: 'PROFESSOR', ativo: true });
     const out = await svc.atualizarStatusUsuario({
@@ -432,6 +473,21 @@ describe('atualizarStatusUsuario — D3 guards', () => {
     });
     assert.equal(out.success, true);
     assert.equal(out.user.ativo, false);
+    // PR #45 — audit é fire-and-forget com action diferenciada
+    assert.equal(state.auditLogs.length, 1);
+    assert.equal(state.auditLogs[0].action, 'user.desativar');
+    assert.equal(state.auditLogs[0].entityId, 'u_prof');
+    assert.equal(state.auditLogs[0].atorUserId, 'u_self');
+  });
+
+  it('PR #45 — ativar PROFESSOR inativo → audit user.ativar', async () => {
+    pushUser({ id: 'u_self', role: 'ADMIN', ativo: true });
+    pushUser({ id: 'u_prof', role: 'PROFESSOR', ativo: false });
+    await svc.atualizarStatusUsuario({
+      id: 'u_prof', ativo: true, atorUserId: 'u_self',
+    });
+    assert.equal(state.auditLogs.length, 1);
+    assert.equal(state.auditLogs[0].action, 'user.ativar');
   });
 
   it('idempotência: estado já igual → noop=true sem update', async () => {

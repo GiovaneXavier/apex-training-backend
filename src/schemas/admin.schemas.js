@@ -63,3 +63,19 @@ export const listProfessoresQuery = z.object({
   search: z.string().trim().min(1).max(120).optional(),
   limit: z.coerce.number().int().min(1).max(50).default(20),
 });
+
+// PR #45 — Bloco D: Audit log viewer
+// ──────────────────────────────────────────────────────────────────────
+
+export const listAuditQuery = z.object({
+  limit: z.coerce.number().int().min(1).max(100).default(20),
+  cursor: z.string().min(1).max(512).optional(),
+  // action é string livre (polimórfica) — validação só de tamanho
+  // pra evitar payloads abusivos.
+  action: z.string().trim().min(1).max(64).optional(),
+  entityType: z.string().trim().min(1).max(64).optional(),
+  entityId: z.string().trim().min(1).max(64).optional(),
+  atorUserId: z.string().trim().min(1).max(64).optional(),
+  desde: z.string().datetime().optional(),
+  ate: z.string().datetime().optional(),
+});

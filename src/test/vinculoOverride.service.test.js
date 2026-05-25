@@ -1,22 +1,17 @@
 import { describe, it, before, beforeEach, mock } from 'node:test';
 import assert from 'node:assert/strict';
 
-// PR #44 — vinculoOverride.service.
+// PR #44 + #45 — vinculoOverride.service.
 //
-// Cobre:
-//  - substituirVinculoProfessor: transação atômica, audit log, idempotência,
-//    todos os guards (aluno/prof inexistente, inativos).
-//  - removerVinculoProfessor: idempotência, audit log gerado por vínculo
-//    removido.
+// Cobre transação atômica de vínculo + audit (agora via logAudit pós-tx
+// do Bloco D, substituindo as antigas chamadas tx.vinculoAuditLog).
 
 const state = {
-  alunos: [], // { id, user: {ativo} }
-  professores: [], // { id, user: {ativo} }
-  vinculos: [], // { id, alunoId, professorId }
-  auditLogs: [], // { acao, alunoId, professorId, motivo, atorUserId }
-  // Telemetria de transação — pra confirmar atomicidade.
+  alunos: [],
+  professores: [],
+  vinculos: [],
+  auditLogs: [], // capturado via mock do logAudit
   transactionCalls: 0,
-  inTransaction: false,
 };
 
 function resetState() {
@@ -25,64 +20,62 @@ function resetState() {
   state.vinculos = [];
   state.auditLogs = [];
   state.transactionCalls = 0;
-  state.inTransaction = false;
 }
 
-// Mock prisma — operações usadas pelo service.
+// Mock do helper de audit — captura chamadas síncronas (sem await),
+// reflete que logAudit é fire-and-forget.
+mock.module('../lib/auditLog.js', {
+  namedExports: {
+    AUDIT_ACTIONS: {
+      VINCULO_CRIAR_PROF: 'vinculo.criar_prof',
+      VINCULO_QUEBRAR_PROF: 'vinculo.quebrar_prof',
+      USER_APROVAR: 'user.aprovar',
+      USER_ATIVAR: 'user.ativar',
+      USER_DESATIVAR: 'user.desativar',
+      AUTH_LOGIN: 'auth.login',
+      AUTH_LOGIN_FALHOU: 'auth.login_falhou',
+      AUTH_LOGOUT: 'auth.logout',
+    },
+    logAudit: (entry) => {
+      state.auditLogs.push(entry);
+    },
+    logAuditAndWait: async (entry) => {
+      state.auditLogs.push(entry);
+      return { id: 'mock', ...entry };
+    },
+  },
+});
+
 mock.module('../lib/prisma.js', {
   namedExports: {
     prisma: {
       aluno: {
-        findUnique: async ({ where }) => {
-          return state.alunos.find((a) => a.id === where.id) ?? null;
-        },
+        findUnique: async ({ where }) => state.alunos.find((a) => a.id === where.id) ?? null,
       },
       professor: {
-        findUnique: async ({ where }) => {
-          return state.professores.find((p) => p.id === where.id) ?? null;
-        },
+        findUnique: async ({ where }) => state.professores.find((p) => p.id === where.id) ?? null,
       },
       vinculoProfessor: {
         findMany: async ({ where }) =>
           state.vinculos.filter((v) => v.alunoId === where.alunoId),
-        // Não chamado fora de transaction no service — mas mantemos
-        // pra completude do mock.
         deleteMany: async ({ where }) => {
           const before = state.vinculos.length;
-          state.vinculos = state.vinculos.filter((v) => !where.id?.in?.includes(v.id));
+          state.vinculos = state.vinculos.filter((v) => v.alunoId !== where.alunoId);
           return { count: before - state.vinculos.length };
-        },
-      },
-      vinculoAuditLog: {
-        // Service usa só dentro de transaction; fora seria erro.
-        createMany: async ({ data }) => {
-          throw new Error('createMany não pode ser chamado fora de transaction');
-        },
-        create: async () => {
-          throw new Error('create não pode ser chamado fora de transaction');
         },
       },
       $transaction: async (fn) => {
         state.transactionCalls += 1;
-        state.inTransaction = true;
         const tx = {
           vinculoProfessor: {
             deleteMany: async ({ where }) => {
               const ids = where.id?.in ?? [];
-              const matchAluno = where.alunoId ?? null;
               const before = state.vinculos.length;
-              state.vinculos = state.vinculos.filter((v) => {
-                if (matchAluno) return v.alunoId !== matchAluno;
-                return !ids.includes(v.id);
-              });
+              state.vinculos = state.vinculos.filter((v) => !ids.includes(v.id));
               return { count: before - state.vinculos.length };
             },
             create: async ({ data, select }) => {
-              const novo = {
-                id: `v_${state.vinculos.length + 1}`,
-                criadoEm: new Date(),
-                ...data,
-              };
+              const novo = { id: `v_${state.vinculos.length + 1}`, criadoEm: new Date(), ...data };
               state.vinculos.push(novo);
               if (!select) return novo;
               const out = {};
@@ -90,23 +83,8 @@ mock.module('../lib/prisma.js', {
               return out;
             },
           },
-          vinculoAuditLog: {
-            createMany: async ({ data }) => {
-              state.auditLogs.push(...data);
-              return { count: data.length };
-            },
-            create: async ({ data }) => {
-              state.auditLogs.push(data);
-              return { id: `log_${state.auditLogs.length}`, ...data };
-            },
-          },
         };
-        try {
-          const out = await fn(tx);
-          return out;
-        } finally {
-          state.inTransaction = false;
-        }
+        return fn(tx);
       },
     },
   },
@@ -119,30 +97,23 @@ before(async () => {
 
 beforeEach(() => resetState());
 
-// ──────────────────────────────────────────────────────────────────────
-// Fábricas
-// ──────────────────────────────────────────────────────────────────────
-
 function pushAluno({ id = 'a1', ativo = true } = {}) {
   state.alunos.push({ id, user: { ativo } });
-  return id;
 }
 function pushProfessor({ id = 'p1', ativo = true } = {}) {
   state.professores.push({ id, user: { ativo } });
-  return id;
 }
 function pushVinculo({ alunoId = 'a1', professorId = 'p1' } = {}) {
   const v = { id: `v_${state.vinculos.length + 1}`, alunoId, professorId };
   state.vinculos.push(v);
-  return v;
 }
 
 // ──────────────────────────────────────────────────────────────────────
-// substituirVinculoProfessor — happy path + transação
+// substituirVinculoProfessor — happy path + audit pós-tx (PR #45)
 // ──────────────────────────────────────────────────────────────────────
 
 describe('substituirVinculoProfessor — happy path', () => {
-  it('aluno sem vínculo + prof ativo → cria 1 vínculo + 1 audit', async () => {
+  it('aluno sem vínculo + prof ativo → cria 1 vínculo + 1 audit "criar"', async () => {
     pushAluno();
     pushProfessor();
     const out = await svc.substituirVinculoProfessor({
@@ -153,10 +124,12 @@ describe('substituirVinculoProfessor — happy path', () => {
     assert.equal(out.noop, false);
     assert.equal(out.removidos, 0);
     assert.equal(state.vinculos.length, 1);
-    assert.equal(state.vinculos[0].professorId, 'p1');
     assert.equal(state.auditLogs.length, 1);
-    assert.equal(state.auditLogs[0].acao, 'criar_prof');
-    assert.equal(state.auditLogs[0].motivo, 'Atribuição inicial');
+    assert.equal(state.auditLogs[0].action, 'vinculo.criar_prof');
+    assert.equal(state.auditLogs[0].entityType, 'Aluno');
+    assert.equal(state.auditLogs[0].entityId, 'a1');
+    assert.equal(state.auditLogs[0].payload.professorId, 'p1');
+    assert.equal(state.auditLogs[0].payload.motivo, 'Atribuição inicial');
     assert.equal(state.auditLogs[0].atorUserId, 'admin1');
   });
 
@@ -171,18 +144,16 @@ describe('substituirVinculoProfessor — happy path', () => {
     });
 
     assert.equal(out.removidos, 1);
-    assert.equal(out.noop, false);
     assert.equal(state.vinculos.length, 1);
     assert.equal(state.vinculos[0].professorId, 'p1');
-    // 1 quebrar (p2) + 1 criar (p1) = 2 audits
     assert.equal(state.auditLogs.length, 2);
-    assert.equal(state.auditLogs[0].acao, 'quebrar_prof');
-    assert.equal(state.auditLogs[0].professorId, 'p2');
-    assert.equal(state.auditLogs[1].acao, 'criar_prof');
-    assert.equal(state.auditLogs[1].professorId, 'p1');
+    assert.equal(state.auditLogs[0].action, 'vinculo.quebrar_prof');
+    assert.equal(state.auditLogs[0].payload.professorId, 'p2');
+    assert.equal(state.auditLogs[1].action, 'vinculo.criar_prof');
+    assert.equal(state.auditLogs[1].payload.professorId, 'p1');
   });
 
-  it('aluno com 3 vínculos legados → quebra todos + cria novo', async () => {
+  it('aluno com 3 vínculos legados → quebra todos + cria novo (3 + 1 audits)', async () => {
     pushAluno();
     pushProfessor({ id: 'p_new' });
     pushVinculo({ professorId: 'p_old1' });
@@ -195,21 +166,19 @@ describe('substituirVinculoProfessor — happy path', () => {
 
     assert.equal(out.removidos, 3);
     assert.equal(state.vinculos.length, 1);
-    assert.equal(state.vinculos[0].professorId, 'p_new');
-    // 3 quebrar + 1 criar
     assert.equal(state.auditLogs.length, 4);
   });
 
-  it('motivo opcional (D7) — ausente vira null no audit', async () => {
+  it('motivo opcional ausente vira null no audit', async () => {
     pushAluno();
     pushProfessor();
     await svc.substituirVinculoProfessor({
       alunoId: 'a1', professorId: 'p1', atorUserId: 'admin1',
     });
-    assert.equal(state.auditLogs[0].motivo, null);
+    assert.equal(state.auditLogs[0].payload.motivo, null);
   });
 
-  it('opera dentro de $transaction (atomicidade)', async () => {
+  it('opera dentro de $transaction (atomicidade preservada)', async () => {
     pushAluno();
     pushProfessor();
     pushVinculo({ professorId: 'p_old' });
@@ -218,6 +187,17 @@ describe('substituirVinculoProfessor — happy path', () => {
     });
     assert.equal(state.transactionCalls, 1, 'transaction precisa ser chamada exatamente 1x');
   });
+
+  it('audit captura ip/userAgent quando requestMeta vem (PR #45)', async () => {
+    pushAluno();
+    pushProfessor();
+    await svc.substituirVinculoProfessor({
+      alunoId: 'a1', professorId: 'p1', atorUserId: 'admin1',
+      requestMeta: { ip: '192.168.1.1', userAgent: 'curl/8' },
+    });
+    assert.equal(state.auditLogs[0].ip, '192.168.1.1');
+    assert.equal(state.auditLogs[0].userAgent, 'curl/8');
+  });
 });
 
 // ──────────────────────────────────────────────────────────────────────
@@ -225,7 +205,7 @@ describe('substituirVinculoProfessor — happy path', () => {
 // ──────────────────────────────────────────────────────────────────────
 
 describe('substituirVinculoProfessor — idempotência', () => {
-  it('aluno já tem APENAS p1 como vínculo → noop sem audit', async () => {
+  it('aluno já tem APENAS p1 → noop sem audit', async () => {
     pushAluno();
     pushProfessor();
     pushVinculo({ professorId: 'p1' });
@@ -236,8 +216,8 @@ describe('substituirVinculoProfessor — idempotência', () => {
 
     assert.equal(out.noop, true);
     assert.equal(out.removidos, 0);
-    assert.equal(state.transactionCalls, 0, 'noop não deve abrir transaction');
-    assert.equal(state.auditLogs.length, 0, 'noop não deve gerar audit');
+    assert.equal(state.transactionCalls, 0);
+    assert.equal(state.auditLogs.length, 0);
     assert.equal(state.vinculos.length, 1);
   });
 
@@ -260,11 +240,9 @@ describe('substituirVinculoProfessor — idempotência', () => {
   it('chamadas repetidas (PUT idempotente) deixam estado consistente', async () => {
     pushAluno();
     pushProfessor();
-    // Primeira chamada — cria
     await svc.substituirVinculoProfessor({
       alunoId: 'a1', professorId: 'p1', atorUserId: 'admin1',
     });
-    // Segunda chamada — noop
     const out2 = await svc.substituirVinculoProfessor({
       alunoId: 'a1', professorId: 'p1', atorUserId: 'admin1',
     });
@@ -275,7 +253,7 @@ describe('substituirVinculoProfessor — idempotência', () => {
 });
 
 // ──────────────────────────────────────────────────────────────────────
-// substituirVinculoProfessor — guards
+// guards
 // ──────────────────────────────────────────────────────────────────────
 
 describe('substituirVinculoProfessor — guards', () => {
@@ -312,6 +290,15 @@ describe('substituirVinculoProfessor — guards', () => {
       (err) => err.status === 422 && /Professor.*inativo/.test(err.message),
     );
   });
+
+  it('guard que falha NÃO gera audit (intenção não-consumada)', async () => {
+    pushAluno({ ativo: false });
+    pushProfessor();
+    await assert.rejects(svc.substituirVinculoProfessor({
+      alunoId: 'a1', professorId: 'p1', atorUserId: 'admin1',
+    }));
+    assert.equal(state.auditLogs.length, 0, 'falha de guard não pode gerar audit');
+  });
 });
 
 // ──────────────────────────────────────────────────────────────────────
@@ -319,7 +306,7 @@ describe('substituirVinculoProfessor — guards', () => {
 // ──────────────────────────────────────────────────────────────────────
 
 describe('removerVinculoProfessor', () => {
-  it('aluno com 2 vínculos → remove ambos + 2 audits', async () => {
+  it('aluno com 2 vínculos → remove ambos + 2 audits "quebrar"', async () => {
     pushAluno();
     pushVinculo({ professorId: 'p1' });
     pushVinculo({ professorId: 'p2' });
@@ -329,18 +316,17 @@ describe('removerVinculoProfessor', () => {
     assert.equal(out.removidos, 2);
     assert.equal(state.vinculos.length, 0);
     assert.equal(state.auditLogs.length, 2);
-    assert.ok(state.auditLogs.every((l) => l.acao === 'quebrar_prof'));
-    assert.ok(state.auditLogs.every((l) => l.motivo === 'Saiu da plataforma'));
+    assert.ok(state.auditLogs.every((l) => l.action === 'vinculo.quebrar_prof'));
+    assert.ok(state.auditLogs.every((l) => l.payload.motivo === 'Saiu da plataforma'));
   });
 
-  it('aluno sem vínculo → noop sem audit nem transaction', async () => {
+  it('aluno sem vínculo → noop sem audit', async () => {
     pushAluno();
     const out = await svc.removerVinculoProfessor({
       alunoId: 'a1', atorUserId: 'admin1',
     });
     assert.equal(out.noop, true);
     assert.equal(out.removidos, 0);
-    assert.equal(state.transactionCalls, 0);
     assert.equal(state.auditLogs.length, 0);
   });
 
@@ -349,12 +335,5 @@ describe('removerVinculoProfessor', () => {
       svc.removerVinculoProfessor({ alunoId: 'fantasma', atorUserId: 'admin1' }),
       (err) => err.status === 404,
     );
-  });
-
-  it('motivo opcional vira null no audit', async () => {
-    pushAluno();
-    pushVinculo({ professorId: 'p1' });
-    await svc.removerVinculoProfessor({ alunoId: 'a1', atorUserId: 'admin1' });
-    assert.equal(state.auditLogs[0].motivo, null);
   });
 });

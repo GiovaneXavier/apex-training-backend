@@ -10,6 +10,7 @@ import {
   substituirVinculoCtrl,
   removerVinculoCtrl,
   listProfessoresAtivosCtrl,
+  listAuditLogsCtrl,
 } from '../controllers/admin.controller.js';
 
 const router = Router();
@@ -32,5 +33,8 @@ router.patch('/users/:id/status', atualizarStatusCtrl);
 router.get('/professores/ativos', listProfessoresAtivosCtrl);
 router.put('/alunos/:alunoId/vinculo-professor', substituirVinculoCtrl);
 router.delete('/alunos/:alunoId/vinculo-professor', removerVinculoCtrl);
+
+// PR #45 — Bloco D: Audit log viewer (read-only).
+router.get('/audit', listAuditLogsCtrl);
 
 export default router;
