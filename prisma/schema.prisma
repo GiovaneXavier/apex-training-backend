@@ -136,6 +136,9 @@ model User {
   professor     Professor?
   nutricionista Nutricionista?
   pushSubscriptions PushSubscription[]
+  // PR #45 — Audit log unificado (substitui VinculoAuditLog do PR #44
+  // via migration de absorção).
+  auditLogs     AuditLog[] @relation("AuditLogAtor")
 
   @@index([role])
   @@index([ativo])
@@ -304,6 +307,44 @@ model VinculoProfessor {
   criadoEm    DateTime  @default(now())
 
   @@unique([alunoId, professorId])
+}
+
+// PR #45 (Sprint 16 — Bloco D) — Audit log unificado.
+//
+// Substitui VinculoAuditLog (PR #44) via migration de absorção:
+// dados antigos viram action='vinculo.criar_prof'/'vinculo.quebrar_prof'
+// com entityType='Aluno' e payload jsonb_build_object(...).
+//
+// Tabela polimórfica: cobre overrides de vínculo, mutações de user
+// (aprovar/ativar/desativar) e auth (login/login_falhou/logout).
+// Novos eventos não exigem migration — basta novo `action` no código
+// (lista canônica em src/lib/auditLog.js).
+//
+// Desnormalização proposital:
+//   - entityType/entityId como string solta (sem FK) → sobrevive a
+//     cascade do Aluno/User/Treino. Audit trail tem que ser eterno.
+//   - payload como Json → flexibilidade sem schema migration por evento.
+//   - FK só pro ator (mantém integridade do "quem fez") com ON DELETE
+//     Restrict — usuário com audit log não pode ser deletado.
+//
+// 4 índices cobrem todos os filtros previstos do viewer (cronológico
+// global, por ator, polimórfico por entidade, por action).
+model AuditLog {
+  id          String   @id @default(cuid())
+  action      String
+  entityType  String
+  entityId    String
+  payload     Json?
+  atorUserId  String
+  ator        User     @relation("AuditLogAtor", fields: [atorUserId], references: [id], onDelete: Restrict)
+  ip          String?
+  userAgent   String?
+  criadoEm    DateTime @default(now())
+
+  @@index([criadoEm])
+  @@index([atorUserId, criadoEm])
+  @@index([entityType, entityId, criadoEm])
+  @@index([action, criadoEm])
 }
 
 model VinculoNutricionista {
